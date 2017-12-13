@@ -131,6 +131,16 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                   var dstaddr = dst
                   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
                   echo "Prepare to send LOCK_OFF to ", address
+                of "lock-status":
+                  var lock_status: ref Parameter = new(Parameter)
+                  lock_status.board = cast[int8](task["board"].getNum())
+                  lock_status.lock = cast[int8](task["lock"].getNum())
+                  lock_status.pin = cast[int16](task["pin"].getNum())
+                  var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
+                  discard task_buffer.add((sockaddr: dst, data: pkt))
+                  var dstaddr = dst
+                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+                  echo "Prepare to send LOCK_STATUS to ", address
                 of "inside-light-on":
                   var light_on: ref Parameter = new(Parameter)
                   var pkt = light_on.encode_as(CommandType.INSIDE_LIGHT_ON, uid)
@@ -227,7 +237,6 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   <<save-connections>>
   let
     taskskey = "tasks." & $uid
-    taskstrs = await redis_client.lRange(taskskey, 0, -1)
     cmd_type = case param.cmd_type:
                  of 0: CommandType.UNKNOWN
                  of 1: CommandType.PING
@@ -244,6 +253,11 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 12: CommandType.BOX_STATUS
                  of 13: CommandType.CHARGER_STATUS
                  else: CommandType.UNKNOWN
+  var taskstrs: seq[string] = @[]
+  var lrange_result = redis_client.lRange(taskskey, 0, -1)
+  yield lrange_result
+  if not lrange_result.failed:
+    taskstrs = lrange_result.read()
   case cmd_type:
     of CommandType.LOCK_OFF:
       echo "confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
@@ -257,7 +271,15 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         except:
           discard
     of CommandType.LOCK_STATUS:
-      echo "confirm cmd type is LOCK_STATUS"
+      echo "confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+      for i in 0..len(param.states) - 1:
+        var state = param.states[i]
+        for j in 0..7:
+          var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
+          if ((1 shl j) and state) != 0:
+            var setex_result = await redis_client.setEx(skey, 30, "1")
+          else:
+            var setex_result = await redis_client.setEx(skey, 30, "0")
       for taskstr in taskstrs:
         try:
           let task = parseJson(taskstr)
