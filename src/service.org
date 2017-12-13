@@ -103,7 +103,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
           redis_connected = true
           redis_client = redis_result.read()
       for uid, dst in device_connections.pairs():
-        let taskkey = "tasks-" & $uid
+        let taskkey = "tasks." & $uid
         let lIndex_result = redis_client.lIndex(taskkey, -1)
         yield lIndex_result
         if lIndex_result.failed():
@@ -226,7 +226,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     sn = param.sn
   <<save-connections>>
   let
-    taskskey = "tasks-" & $uid
+    taskskey = "tasks." & $uid
     taskstrs = await redis_client.lRange(taskskey, 0, -1)
     cmd_type = case param.cmd_type:
                  of 0: CommandType.UNKNOWN
