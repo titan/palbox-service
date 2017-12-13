@@ -1,0 +1,418 @@
+* 基本框架
+
+Box service 是设备连接到系统的通道。设备通过 box service 上报数据；管理系统通过
+box service 给设备发送命令。服务采用异步方式编写，启动后侦听 UDP/5008 端口，处理
+收到的请求，并把响应返回给请求的设备；或者把任务数据下发给设备。
+
+Box service 依赖 redis 来对设备下发命令。redis 用 AsyncRedis 来访问， AsyncRedis
+是 async 的，要求能做到断开后还能重新连接。为了能做到这一点，代码中采用
+redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对应的变量，后续程序发
+现连接断开，会自动重新连接。
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
+  import asyncdispatch, asyncnet, base64, json, nativesockets, posix, redis, ringbuffer, strutils, tables, times
+  import box_servicepkg/box_packer, box_servicepkg/parameter
+
+  <<hexdump>>
+
+  type
+    Task = tuple[sockaddr: Sockaddr_in, data: seq[byte]]
+
+  var device_connections: Table[box_packer.UID, Sockaddr_in] = initTable[box_packer.UID, Sockaddr_in]()
+  var task_buffer: RingBuffer[Task] = newRingBuffer[Task](bitsize = 10)
+
+  proc prepareAddress(intaddr: uint32, intport: uint16): ptr Sockaddr_in =
+    result = cast[ptr Sockaddr_in](alloc0(sizeof(Sockaddr_in)))
+    result.sin_family = toInt(nativesockets.AF_INET)
+    result.sin_port = nativesockets.htons(intport)
+    result.sin_addr.s_addr = nativesockets.htonl(intaddr)
+
+  proc send_always(sock: AsyncFD) {.async.} =
+    var
+      sndbuf: ref array[1024, byte] = new(array[1024, byte])
+      address = newString(128)
+      slen = sizeof(Sockaddr_in).SockLen
+    while true:
+      if len(task_buffer) > 0'u32:
+        let task = pop(task_buffer)
+        zeroMem(cast[pointer](sndbuf), 1024)
+        let encoded = base64.encode[byte](task.data, lineLen = 1024)
+        for i in 0..(len(encoded) - 1):
+          sndbuf[i] = ord(encoded[i])
+        var dst = task.sockaddr
+        asyncCheck sendTo(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
+        discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
+        #echo "Send ", len(encoded), " byte(s) to ", address
+        #echo encoded
+        #echo hexdump(task.data, len(task.data))
+      else:
+        await sleepAsync(1000)
+
+  proc receive_always(sock: AsyncFD) {.async.} =
+    var
+      rcvbuf: ref array[1024, byte] = new(array[1024, byte])
+      address = newString(128)
+      slen = sizeof(Sockaddr_in).SockLen
+      redis_client: AsyncRedis
+      redis_connected: bool = false
+    while true:
+      if not redis_connected:
+        let redis_result = openAsync(host = "localhost")
+        yield redis_result
+        if redis_result.failed():
+          redis_connected = false
+        else:
+          redis_connected = true
+          redis_client = redis_result.read()
+      zeroMem(cast[pointer](rcvbuf), 1024)
+      var saddr = Sockaddr_in()
+      zeroMem(cast[pointer](addr(saddr)), sizeof(Sockaddr_in))
+      let blen = await sock.recvFromInto(cast[pointer](rcvbuf), 1024, cast[ptr SockAddr](addr(saddr)), addr(slen))
+      discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
+      let rcvd: string = base64.decode($cast[cstring](rcvbuf))
+      for i in 0..len(rcvd) - 1:
+        rcvbuf[i] = ord(rcvd[i])
+      echo hexdump(@(rcvbuf[]), len(rcvd))
+      var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
+      if data != nil:
+        case data.cmd_type:
+          of CommandType.PING:
+            echo "Receive PING from ", address
+            <<ping>>
+          of CommandType.CONFIRM:
+            echo "Receive CONFIRM from ", address
+            <<confirm>>
+          else:
+            echo "Receive UNKNOWN from ", address
+      else:
+        echo "Receive invalid packet from ", address
+
+
+  proc check_always() {.async.} =
+    var
+      redis_client: AsyncRedis
+      redis_connected: bool = false
+      address = newString(128)
+    while true:
+      if not redis_connected:
+        let redis_result = openAsync(host = "localhost")
+        yield redis_result
+        if redis_result.failed():
+          redis_connected = false
+        else:
+          redis_connected = true
+          redis_client = redis_result.read()
+      for uid, dst in device_connections.pairs():
+        let taskkey = "tasks-" & $uid
+        let lIndex_result = redis_client.lIndex(taskkey, -1)
+        yield lIndex_result
+        if lIndex_result.failed():
+          continue
+        else:
+          let taskstr = lIndex_result.read()
+          if taskstr == redisNil:
+            continue
+          else:
+            echo "found task for ", $uid
+            try:
+              let task = parseJson(taskstr)
+              if task["expires-at"].getNum() < epochTime().toInt():
+                asyncCheck redis_client.lrem(taskkey, taskstr, 1)
+                echo "remove expired task in ", taskkey, ": ", taskstr
+                continue
+              case task["command"].getStr():
+                of "lock-off":
+                  var lock_off: ref Parameter = new(Parameter)
+                  lock_off.board = cast[int8](task["board"].getNum())
+                  lock_off.lock = cast[int8](task["lock"].getNum())
+                  lock_off.pin = cast[int16](task["pin"].getNum())
+                  var pkt = lock_off.encode_as(CommandType.LOCK_OFF, uid)
+                  discard task_buffer.add((sockaddr: dst, data: pkt))
+                  var dstaddr = dst
+                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+                  echo "Prepare to send LOCK_OFF to ", address
+                of "inside-light-on":
+                  var light_on: ref Parameter = new(Parameter)
+                  var pkt = light_on.encode_as(CommandType.INSIDE_LIGHT_ON, uid)
+                  discard task_buffer.add((sockaddr: dst, data: pkt))
+                  var dstaddr = dst
+                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+                  echo "Prepare to send INSIDE_LIGHT_ON to ", address
+                of "inside-light-off":
+                  var light_off: ref Parameter = new(Parameter)
+                  var pkt = light_off.encode_as(CommandType.INSIDE_LIGHT_OFF, uid)
+                  discard task_buffer.add((sockaddr: dst, data: pkt))
+                  var dstaddr = dst
+                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+                  echo "Prepare to send INSIDE_LIGHT_Off to ", address
+                of "outside-light-on":
+                  var light_on: ref Parameter = new(Parameter)
+                  var pkt = light_on.encode_as(CommandType.OUTSIDE_LIGHT_ON, uid)
+                  discard task_buffer.add((sockaddr: dst, data: pkt))
+                  var dstaddr = dst
+                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+                  echo "Prepare to send OUTSIDE_LIGHT_ON to ", address
+                of "outside-light-off":
+                  var light_off: ref Parameter = new(Parameter)
+                  var pkt = light_off.encode_as(CommandType.OUTSIDE_LIGHT_OFF, uid)
+                  discard task_buffer.add((sockaddr: dst, data: pkt))
+                  var dstaddr = dst
+                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+                  echo "Prepare to send OUTSIDE_LIGHT_Off to ", address
+                of "ultraviolet-on":
+                  var ultraviolet_on: ref Parameter = new(Parameter)
+                  var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
+                  discard task_buffer.add((sockaddr: dst, data: pkt))
+                  var dstaddr = dst
+                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+                  echo "Prepare to send ULTRAVIOLET_ON to ", address
+                else:
+                  asyncCheck redis_client.rpop(taskkey)
+            except:
+              echo "Something wrong, then remove the oldest task in ", taskkey
+              echo getCurrentExceptionMsg()
+              asyncCheck redis_client.rpop(taskkey)
+      await sleepAsync(1000)
+
+  proc serve() =
+    var
+      name = prepareAddress(INADDR_ANY, 5008)
+      sock = newAsyncNativeSocket(domain = Domain.AF_INET, sockType = SockType.SOCK_DGRAM, protocol = Protocol.IPPROTO_UDP)
+
+    discard bindAddr(sock.SocketHandle, cast[ptr SockAddr](name), sizeof(Sockaddr_in).Socklen)
+    echo "server bound to port 5008"
+
+    asyncCheck receive_always(sock)
+    asyncCheck send_always(sock)
+    asyncCheck check_always()
+    run_forever()
+
+  serve()
+
+#+end_src
+
+* PING
+
+为了保持数据链路的畅通，设备会定时往 box service 发送 PING 命令。Box service 返
+回 PONG 命令，把当前时间返回给设备。
+
+#+begin_src nim :noweb-ref ping
+  let
+    uid = data.uid
+    param = data.parameter
+    sn = param.sn
+  <<save-connections>>
+  #echo "PING uid", $uid
+  <<pong>>
+#+end_src
+* PONG
+#+begin_src nim :noweb-ref pong
+  var pong_param: ref Parameter = new(Parameter)
+  pong_param.sn = sn
+  pong_param.version = 0
+  pong_param.zone = 8 * 60 * 60 * 1000
+  pong_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = pong_param.encode_as(CommandType.PONG, uid)
+  discard task_buffer.add((sockaddr: saddr, data: pkt))
+  echo "Prepare to send PONG to ", address
+#+end_src
+* CONFIRM
+收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
+队列中删除。
+#+begin_src nim :noweb-ref confirm
+  let
+    uid = data.uid
+    param = data.parameter
+    sn = param.sn
+  <<save-connections>>
+  let
+    taskskey = "tasks-" & $uid
+    taskstrs = await redis_client.lRange(taskskey, 0, -1)
+    cmd_type = case param.cmd_type:
+                 of 0: CommandType.UNKNOWN
+                 of 1: CommandType.PING
+                 of 2: CommandType.PONG
+                 of 3: CommandType.CONFIRM
+                 of 4: CommandType.LOCK_OFF
+                 of 5: CommandType.LOCK_STATUS
+                 of 6: CommandType.INSIDE_LIGHT_ON
+                 of 7: CommandType.INSIDE_LIGHT_OFF
+                 of 8: CommandType.OUTSIDE_LIGHT_ON
+                 of 9: CommandType.OUTSIDE_LIGHT_OFF
+                 of 10: CommandType.ULTRAVIOLET_ON
+                 of 11: CommandType.ULTRAVIOLET_OFF
+                 of 12: CommandType.BOX_STATUS
+                 of 13: CommandType.CHARGER_STATUS
+                 else: CommandType.UNKNOWN
+  case cmd_type:
+    of CommandType.LOCK_OFF:
+      echo "confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
+      for taskstr in taskstrs:
+        try:
+          let task = parseJson(taskstr)
+          if task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
+            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+            echo "Reomve from redis ", taskstr
+            break
+        except:
+          discard
+    of CommandType.LOCK_STATUS:
+      echo "confirm cmd type is LOCK_STATUS"
+      for taskstr in taskstrs:
+        try:
+          let task = parseJson(taskstr)
+          if task["command"].getStr() == "lock-status" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
+            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+            break
+        except:
+          discard
+    of CommandType.INSIDE_LIGHT_ON:
+      echo "confirm cmd type is INSIDE_LIGHT_ON"
+      for taskstr in taskstrs:
+        try:
+          let task = parseJson(taskstr)
+          if task["command"].getStr() == "inside-light-on":
+            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+            break
+        except:
+          discard
+    of CommandType.INSIDE_LIGHT_OFF:
+      echo "confirm cmd type is OUTSIDE_LIGHT_ON"
+      for taskstr in taskstrs:
+        try:
+          let task = parseJson(taskstr)
+          if task["command"].getStr() == "inside-light-off":
+            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+            break
+        except:
+          discard
+    of CommandType.ULTRAVIOLET_ON:
+      echo "confirm cmd type is ULTRAVIOLET_ON"
+      for taskstr in taskstrs:
+        try:
+          let task = parseJson(taskstr)
+          if task["command"].getStr() == "ultraviolet-on":
+            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+            break
+        except:
+          discard
+    of CommandType.ULTRAVIOLET_OFF:
+      echo "confirm cmd type is ULTRAVIOLET_OFF"
+      for taskstr in taskstrs:
+        try:
+          let task = parseJson(taskstr)
+          if task["command"].getStr() == "ultraviolet-off":
+            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+            break
+        except:
+          discard
+    else:
+      echo "Invalid command"
+#+end_src
+
+* 数据封包
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
+  import parameter, zeropack
+  import sequtils, strutils
+  type
+    CommandType* {.pure.} = enum
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCK_STATUS = 5, INSIDE_LIGHT_ON = 6, INSIDE_LIGHT_OFF = 7, OUTSIDE_LIGHT_ON = 8, OUTSIDE_LIGHT_OFF = 9, ULTRAVIOLET_ON = 10, ULTRAVIOLET_OFF = 11, BOX_STATUS = 12, CHARGER_STATUS = 13
+    UID* = array[0..11, byte]
+    PackResultObject* = object of RootObj
+      uid*: UID
+      cmd_type*: CommandType
+      parameter*: ref Parameter
+    PackResult* = ref PackResultObject
+
+  const version: int = 0
+  const CRC8_KEY: uint8 = 0x07
+
+  proc `$`*(uid: UID): string =
+    return uid.mapIt(toHex(cast[BiggestInt](it), 2)).join("-")
+
+  proc crc8(buf: seq[byte], offset: int, len: int): uint8 =
+    var bptr = offset
+    let stop = offset + len
+    while bptr != stop:
+      var i: uint8 = 0x80
+      while i != 0:
+        if (result and 0x80) != 0:
+          result = result shl 1
+          result = result xor CRC8_KEY
+        else:
+          result = result shl 1
+        if (buf[bptr] and i) != 0:
+          result = result xor CRC8_KEY
+        i = i shr 1
+      bptr += 1
+
+  proc encode(payload: seq[byte], cmd_type: CommandType, uid: UID): seq[byte] =
+    let
+      payload_size = len(payload)
+      header_size = 1 + 1 + 1 + 12
+      size: int = header_size + payload_size
+      uid_start = 3
+    var buf: seq[byte] = newSeq[byte](size)
+    buf[0] = cast[byte](size and 0xFF)
+    buf[2] = cast[byte](ord(cmd_type))
+    for i in 0..11:
+      buf[uid_start + i] = uid[i]
+    var payload_start = header_size
+    for i in 0..(payload_size - 1):
+      buf[payload_start + i] = payload[i]
+    buf[1] = crc8(buf, 2, payload_size + header_size - 2)
+    return buf
+
+  proc encode_as*(parameter: ref Parameter, cmd_type: CommandType, uid: UID): seq[byte] =
+    let size: int = parameter.calculate_size()
+    var buf: seq[byte] = newSeq[byte](size)
+    discard parameter.encode_into(buf, 0)
+    let zipped_buf = zeropack(buf)
+    return encode(zipped_buf, cmd_type, uid)
+
+  proc decode*(buf: seq[byte], offset: int, length: int): PackResult =
+    let
+      header_size = 1 + 1 + 1 + 12
+      packed_size = cast[int](buf[offset])
+    if length != packed_size:
+      echo "length is invalid, got ", $length, " but need ", packed_size
+      #echo hexdump(buf, length)
+      return nil
+    let checksum: uint8 = crc8(buf, offset + 2, length - 2)
+    if checksum != buf[offset + 1]:
+      echo "checksum is invalid, got ", buf[offset + 1], " but should be ", checksum, "\n"
+      return nil
+    var uid: UID
+    for i in 0..11:
+      uid[i] = buf[offset + 1 + 1 + 1 + i]
+    let unzipped: seq[byte] = unzeropack(buf, offset + header_size, length - header_size)
+    case (buf[offset + 1 + 1]):
+      of 1:
+        result = PackResult(cmd_type: CommandType.PING, uid: uid, parameter: parameter.decode_from(unzipped, 0))
+      of 3:
+        result = PackResult(cmd_type: CommandType.CONFIRM, uid: uid, parameter: parameter.decode_from(unzipped, 0))
+      else:
+        echo "command type is invalid\n"
+        return nil
+#+end_src
+* 支援方法
+** 保存连接
+
+将设备的地址和对应的 Socket Address 保存到 device_connections 中，以后可以根据此
+地址，主动给设备发送数据。
+
+#+begin_src nim :noweb-ref save-connections
+  device_connections[uid] = saddr
+#+end_src
+
+** hexdump
+
+#+begin_src nim :noweb-ref hexdump
+  proc hexdump(buf: seq[byte], size: int): string =
+    var output = ""
+    for i in 0..(size - 1):
+      output.add("$1 " % (toHex(buf[i])))
+      if i mod 8 == 7:
+        output.add("\n")
+    return output
+#+end_src

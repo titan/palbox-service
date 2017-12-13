@@ -1,0 +1,37 @@
+* PROTOCAL
+
+|                   | rssi | ber | zone | timestamp | board | lock | states | cmd-type | charger |
+|-------------------+------+-----+------+-----------+-------+------+--------+----------+---------|
+| PING              | ✓    | ✓   |      |           |       |      |        |          |         |
+| PONG              |      |     | ✓    | ✓         |       |      |        |          |         |
+| CONFIRM           |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |         |
+| LOCK_OFF          |      |     |      |           | ✓     | ✓    |        |          |         |
+| LOCK_STATUS       |      |     |      |           | ✓     | [✓]  |        |          |         |
+| INSIDE_LIGHT_ON   |      |     |      |           |       |      |        |          |         |
+| INSIDE_LIGHT_OFF  |      |     |      |           |       |      |        |          |         |
+| OUTSIDE_LIGHT_ON  |      |     |      |           |       |      |        |          |         |
+| OUTSIDE_LIGHT_OFF |      |     |      |           |       |      |        |          |         |
+| ULTRAVIOLET_ON    |      |     |      |           |       |      |        |          |         |
+| ULTRAVIOLET_OFF   |      |     |      |           |       |      |        |          |         |
+| CAMERA_ON         |      |     |      |           |       |      |        |          |         |
+| CAMERA_OFF        |      |     |      |           |       |      |        |          |         |
+| BOX_STATUS        |      |     |      |           | ✓     | ✓    |        |          |         |
+| CHARGER_STATUS    |      |     |      |           |       |      |        |          | ✓       |
+
+
+#+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
+  (struct parameter
+    (int 0 sn) ;; 请求序列号
+    (byte 1 version) ;; 版本号
+    (short 2 pin) ;; 命令的 PIN 值
+    (byte 3 rssi) ;; 信号强度
+    (byte 4 ber) ;; 信号强度相关
+    (int 5 zone) ;; 时区
+    (long 6 timestamp) ;; 服务端时间戳
+    (byte 7 board) ;; 锁控板编号
+    (byte 8 lock) ;; 锁编号
+    (byte* 9 states) ;; 状态(和锁，测物条相关)
+    (byte 10 cmd-type) ;; 确认命令类型
+    (byte 11 charger) ;; 充电器编号
+    )
+#+end_src
