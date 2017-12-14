@@ -122,60 +122,23 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                 continue
               case task["command"].getStr():
                 of "lock-off":
-                  var lock_off: ref Parameter = new(Parameter)
-                  lock_off.board = cast[int8](task["board"].getNum())
-                  lock_off.lock = cast[int8](task["lock"].getNum())
-                  lock_off.pin = cast[int16](task["pin"].getNum())
-                  var pkt = lock_off.encode_as(CommandType.LOCK_OFF, uid)
-                  discard task_buffer.add((sockaddr: dst, data: pkt))
-                  var dstaddr = dst
-                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-                  echo "Prepare to send LOCK_OFF to ", address
+                  <<lock-off>>
                 of "lock-status":
-                  var lock_status: ref Parameter = new(Parameter)
-                  lock_status.board = cast[int8](task["board"].getNum())
-                  lock_status.lock = cast[int8](task["lock"].getNum())
-                  lock_status.pin = cast[int16](task["pin"].getNum())
-                  var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
-                  discard task_buffer.add((sockaddr: dst, data: pkt))
-                  var dstaddr = dst
-                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-                  echo "Prepare to send LOCK_STATUS to ", address
+                  <<lock-status>>
+                of "lock-detect":
+                  <<lock-detect>>
                 of "inside-light-on":
-                  var light_on: ref Parameter = new(Parameter)
-                  var pkt = light_on.encode_as(CommandType.INSIDE_LIGHT_ON, uid)
-                  discard task_buffer.add((sockaddr: dst, data: pkt))
-                  var dstaddr = dst
-                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-                  echo "Prepare to send INSIDE_LIGHT_ON to ", address
+                  <<inside-light-on>>
                 of "inside-light-off":
-                  var light_off: ref Parameter = new(Parameter)
-                  var pkt = light_off.encode_as(CommandType.INSIDE_LIGHT_OFF, uid)
-                  discard task_buffer.add((sockaddr: dst, data: pkt))
-                  var dstaddr = dst
-                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-                  echo "Prepare to send INSIDE_LIGHT_Off to ", address
+                  <<inside-light-off>>
                 of "outside-light-on":
-                  var light_on: ref Parameter = new(Parameter)
-                  var pkt = light_on.encode_as(CommandType.OUTSIDE_LIGHT_ON, uid)
-                  discard task_buffer.add((sockaddr: dst, data: pkt))
-                  var dstaddr = dst
-                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-                  echo "Prepare to send OUTSIDE_LIGHT_ON to ", address
+                  <<outside-light-on>>
                 of "outside-light-off":
-                  var light_off: ref Parameter = new(Parameter)
-                  var pkt = light_off.encode_as(CommandType.OUTSIDE_LIGHT_OFF, uid)
-                  discard task_buffer.add((sockaddr: dst, data: pkt))
-                  var dstaddr = dst
-                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-                  echo "Prepare to send OUTSIDE_LIGHT_Off to ", address
+                  <<outside-light-off>>
                 of "ultraviolet-on":
-                  var ultraviolet_on: ref Parameter = new(Parameter)
-                  var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
-                  discard task_buffer.add((sockaddr: dst, data: pkt))
-                  var dstaddr = dst
-                  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-                  echo "Prepare to send ULTRAVIOLET_ON to ", address
+                  <<ultraviolet-on>>
+                of "ultraviolet-off":
+                  <<ultraviolet-off>>
                 else:
                   asyncCheck redis_client.rpop(taskkey)
             except:
@@ -250,7 +213,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 9: CommandType.OUTSIDE_LIGHT_OFF
                  of 10: CommandType.ULTRAVIOLET_ON
                  of 11: CommandType.ULTRAVIOLET_OFF
-                 of 12: CommandType.BOX_STATUS
+                 of 12: CommandType.LOCK_DETECT
                  of 13: CommandType.CHARGER_STATUS
                  else: CommandType.UNKNOWN
   var taskstrs: seq[string] = @[]
@@ -260,76 +223,250 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     taskstrs = lrange_result.read()
   case cmd_type:
     of CommandType.LOCK_OFF:
-      echo "confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
-      for taskstr in taskstrs:
-        try:
-          let task = parseJson(taskstr)
-          if task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
-            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-            echo "Reomve from redis ", taskstr
-            break
-        except:
-          discard
+      <<lock-off-confirm>>
     of CommandType.LOCK_STATUS:
-      echo "confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
-      for i in 0..len(param.states) - 1:
-        var state = param.states[i]
-        for j in 0..7:
-          var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
-          if ((1 shl j) and state) != 0:
-            var setex_result = await redis_client.setEx(skey, 30, "1")
-          else:
-            var setex_result = await redis_client.setEx(skey, 30, "0")
-      for taskstr in taskstrs:
-        try:
-          let task = parseJson(taskstr)
-          if task["command"].getStr() == "lock-status" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
-            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-            break
-        except:
-          discard
+      <<lock-status-confirm>>
+    of CommandType.LOCK_DETECT:
+      <<lock-detect-confirm>>
     of CommandType.INSIDE_LIGHT_ON:
-      echo "confirm cmd type is INSIDE_LIGHT_ON"
-      for taskstr in taskstrs:
-        try:
-          let task = parseJson(taskstr)
-          if task["command"].getStr() == "inside-light-on":
-            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-            break
-        except:
-          discard
+      <<inside-light-on-confirm>>
     of CommandType.INSIDE_LIGHT_OFF:
-      echo "confirm cmd type is OUTSIDE_LIGHT_ON"
-      for taskstr in taskstrs:
-        try:
-          let task = parseJson(taskstr)
-          if task["command"].getStr() == "inside-light-off":
-            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-            break
-        except:
-          discard
+      <<inside-light-off-confirm>>
+    of CommandType.OUTSIDE_LIGHT_ON:
+      <<outside-light-on-confirm>>
+    of CommandType.OUTSIDE_LIGHT_OFF:
+      <<outside-light-off-confirm>>
     of CommandType.ULTRAVIOLET_ON:
-      echo "confirm cmd type is ULTRAVIOLET_ON"
-      for taskstr in taskstrs:
-        try:
-          let task = parseJson(taskstr)
-          if task["command"].getStr() == "ultraviolet-on":
-            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-            break
-        except:
-          discard
+      <<ultraviolet-on-confirm>>
     of CommandType.ULTRAVIOLET_OFF:
-      echo "confirm cmd type is ULTRAVIOLET_OFF"
-      for taskstr in taskstrs:
-        try:
-          let task = parseJson(taskstr)
-          if task["command"].getStr() == "ultraviolet-off":
-            asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-            break
-        except:
-          discard
+      <<ultraviolet-off-confirm>>
     else:
       echo "Invalid command"
+#+end_src
+
+* LOCK-OFF
+** 下行命令
+#+begin_src nim :noweb-ref lock-off
+  var lock_off: ref Parameter = new(Parameter)
+  lock_off.board = cast[int8](task["board"].getNum())
+  lock_off.lock = cast[int8](task["lock"].getNum())
+  lock_off.pin = cast[int16](task["pin"].getNum())
+  var pkt = lock_off.encode_as(CommandType.LOCK_OFF, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send LOCK_OFF to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref lock-off-confirm
+  echo "confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        echo "Reomve from redis ", taskstr
+        break
+    except:
+      discard
+#+end_src
+* LOCK-STATUS
+** 下行命令
+#+begin_src nim :noweb-ref lock-status
+  var lock_status: ref Parameter = new(Parameter)
+  lock_status.board = cast[int8](task["board"].getNum())
+  lock_status.lock = cast[int8](task["lock"].getNum())
+  lock_status.pin = cast[int16](task["pin"].getNum())
+  var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send LOCK_STATUS to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref lock-status-confirm
+  echo "confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+  for i in 0..len(param.states) - 1:
+    var state = param.states[i]
+    for j in 0..7:
+      var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
+      if ((1 shl j) and state) != 0:
+        var setex_result = await redis_client.setEx(skey, 30, "1")
+      else:
+        var setex_result = await redis_client.setEx(skey, 30, "0")
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "lock-status" and cast[int8](task["board"].getNum()) == param.board:
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* LOCK-DETECT
+** 下行命令
+#+begin_src nim :noweb-ref lock-detect
+  var lock_status: ref Parameter = new(Parameter)
+  lock_status.board = cast[int8](task["board"].getNum())
+  lock_status.lock = cast[int8](task["lock"].getNum())
+  lock_status.pin = cast[int16](task["pin"].getNum())
+  var pkt = lock_status.encode_as(CommandType.LOCK_DETECT, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send LOCK_DETECT to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref lock-detect-confirm
+  echo "confirm cmd type is LOCK_DETECT, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+  for i in 0..len(param.states) - 1:
+    var state = param.states[i]
+    for j in 0..7:
+      var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
+      if ((1 shl j) and state) != 0:
+        var setex_result = await redis_client.setEx(skey, 30, "1")
+      else:
+        var setex_result = await redis_client.setEx(skey, 30, "0")
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getNum()) == param.board:
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* INSIDE-LIGHT-ON
+** 下行命令
+#+begin_src nim :noweb-ref inside-light-on
+  var light_on: ref Parameter = new(Parameter)
+  var pkt = light_on.encode_as(CommandType.INSIDE_LIGHT_ON, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send INSIDE_LIGHT_ON to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref inside-light-on-confirm
+  echo "confirm cmd type is INSIDE_LIGHT_ON"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "inside-light-on":
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* INSIDE-LIGHT-OFF
+** 下行命令
+#+begin_src nim :noweb-ref inside-light-off
+  var light_off: ref Parameter = new(Parameter)
+  var pkt = light_off.encode_as(CommandType.INSIDE_LIGHT_OFF, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send INSIDE_LIGHT_Off to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref inside-light-off-confirm
+  echo "confirm cmd type is INSIDE_LIGHT_OFF"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "inside-light-off":
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* OUTSIDE-LIGHT-ON
+** 下行命令
+#+begin_src nim :noweb-ref outside-light-on
+  var light_on: ref Parameter = new(Parameter)
+  var pkt = light_on.encode_as(CommandType.OUTSIDE_LIGHT_ON, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send OUTSIDE_LIGHT_ON to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref outside-light-on-confirm
+  echo "confirm cmd type is OUTSIDE_LIGHT_ON"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "outside-light-on":
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* OUTSIDE-LIGHT-OFF
+** 下行命令
+#+begin_src nim :noweb-ref outside-light-off
+  var light_off: ref Parameter = new(Parameter)
+  var pkt = light_off.encode_as(CommandType.OUTSIDE_LIGHT_OFF, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send OUTSIDE_LIGHT_Off to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref outside-light-off-confirm
+  echo "confirm cmd type is OUTSIDE_LIGHT_OFF"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "outside-light-off":
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* ULTRAVIOLET-ON
+** 下行命令
+#+begin_src nim :noweb-ref ultraviolet-on
+  var ultraviolet_on: ref Parameter = new(Parameter)
+  var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send ULTRAVIOLET_ON to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref ultraviolet-on-confirm
+  echo "confirm cmd type is ULTRAVIOLET_ON"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "ultraviolet-on":
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* ULTRAVIOLET-OFF
+** 下行命令
+#+begin_src nim :noweb-ref ultraviolet-off
+  var ultraviolet_off: ref Parameter = new(Parameter)
+  var pkt = ultraviolet_off.encode_as(CommandType.ULTRAVIOLET_OFF, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send ULTRAVIOLET_OFF to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref ultraviolet-off-confirm
+  echo "confirm cmd type is ULTRAVIOLET_OFF"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "ultraviolet-off":
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
 #+end_src
 
 * 数据封包
@@ -338,7 +475,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   import sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCK_STATUS = 5, INSIDE_LIGHT_ON = 6, INSIDE_LIGHT_OFF = 7, OUTSIDE_LIGHT_ON = 8, OUTSIDE_LIGHT_OFF = 9, ULTRAVIOLET_ON = 10, ULTRAVIOLET_OFF = 11, BOX_STATUS = 12, CHARGER_STATUS = 13
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCK_STATUS = 5, INSIDE_LIGHT_ON = 6, INSIDE_LIGHT_OFF = 7, OUTSIDE_LIGHT_ON = 8, OUTSIDE_LIGHT_OFF = 9, ULTRAVIOLET_ON = 10, ULTRAVIOLET_OFF = 11, LOCK_DETECT = 12, CHARGER_STATUS = 13
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
