@@ -56,36 +56,37 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       redis_client: AsyncRedis
       redis_connected: bool = false
     while true:
-      if not redis_connected:
-        let redis_result = openAsync(host = "localhost")
-        yield redis_result
-        if redis_result.failed():
-          redis_connected = false
-        else:
-          redis_connected = true
-          redis_client = redis_result.read()
-      zeroMem(cast[pointer](rcvbuf), 1024)
-      var saddr = Sockaddr_in()
-      zeroMem(cast[pointer](addr(saddr)), sizeof(Sockaddr_in))
-      let blen = await sock.recvFromInto(cast[pointer](rcvbuf), 1024, cast[ptr SockAddr](addr(saddr)), addr(slen))
-      discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
-      let rcvd: string = base64.decode($cast[cstring](rcvbuf))
-      for i in 0..len(rcvd) - 1:
-        rcvbuf[i] = ord(rcvd[i])
-      echo hexdump(@(rcvbuf[]), len(rcvd))
-      var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
-      if data != nil:
-        case data.cmd_type:
-          of CommandType.PING:
-            echo "Receive PING from ", address
-            <<ping>>
-          of CommandType.CONFIRM:
-            echo "Receive CONFIRM from ", address
-            <<confirm>>
+      block mainloop:
+        if not redis_connected:
+          let redis_result = openAsync(host = "localhost")
+          yield redis_result
+          if redis_result.failed():
+            redis_connected = false
           else:
-            echo "Receive UNKNOWN from ", address
-      else:
-        echo "Receive invalid packet from ", address
+            redis_connected = true
+            redis_client = redis_result.read()
+        zeroMem(cast[pointer](rcvbuf), 1024)
+        var saddr = Sockaddr_in()
+        zeroMem(cast[pointer](addr(saddr)), sizeof(Sockaddr_in))
+        let blen = await sock.recvFromInto(cast[pointer](rcvbuf), 1024, cast[ptr SockAddr](addr(saddr)), addr(slen))
+        discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
+        let rcvd: string = base64.decode($cast[cstring](rcvbuf))
+        for i in 0..len(rcvd) - 1:
+          rcvbuf[i] = ord(rcvd[i])
+        # echo hexdump(@(rcvbuf[]), len(rcvd))
+        var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
+        if data != nil:
+          case data.cmd_type:
+            of CommandType.PING:
+              echo "Receive PING from ", address
+              <<ping>>
+            of CommandType.CONFIRM:
+              echo "Receive CONFIRM from ", address
+              <<confirm>>
+            else:
+              echo "Receive UNKNOWN from ", address
+        else:
+          echo "Receive invalid packet from ", address
 
 
   proc check_always() {.async.} =
@@ -107,7 +108,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         let lIndex_result = redis_client.lIndex(taskkey, -1)
         yield lIndex_result
         if lIndex_result.failed():
-          continue
+          redis_connected = false
+          break
         else:
           let taskstr = lIndex_result.read()
           if taskstr == redisNil:
@@ -139,6 +141,10 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                   <<ultraviolet-on>>
                 of "ultraviolet-off":
                   <<ultraviolet-off>>
+                of "camera-on":
+                  <<camera-on>>
+                of "camera-off":
+                  <<camera-off>>
                 else:
                   asyncCheck redis_client.rpop(taskkey)
             except:
@@ -207,20 +213,25 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 3: CommandType.CONFIRM
                  of 4: CommandType.LOCK_OFF
                  of 5: CommandType.LOCK_STATUS
-                 of 6: CommandType.INSIDE_LIGHT_ON
-                 of 7: CommandType.INSIDE_LIGHT_OFF
-                 of 8: CommandType.OUTSIDE_LIGHT_ON
-                 of 9: CommandType.OUTSIDE_LIGHT_OFF
-                 of 10: CommandType.ULTRAVIOLET_ON
-                 of 11: CommandType.ULTRAVIOLET_OFF
-                 of 12: CommandType.LOCK_DETECT
-                 of 13: CommandType.CHARGER_STATUS
+                 of 6: CommandType.LOCK_DETECT
+                 of 7: CommandType.CHARGER_STATUS
+                 of 8: CommandType.INSIDE_LIGHT_ON
+                 of 9: CommandType.INSIDE_LIGHT_OFF
+                 of 10: CommandType.OUTSIDE_LIGHT_ON
+                 of 11: CommandType.OUTSIDE_LIGHT_OFF
+                 of 12: CommandType.ULTRAVIOLET_ON
+                 of 13: CommandType.ULTRAVIOLET_OFF
+                 of 14: CommandType.CAMERA_ON
+                 of 15: CommandType.CAMERA_OFF
                  else: CommandType.UNKNOWN
   var taskstrs: seq[string] = @[]
   var lrange_result = redis_client.lRange(taskskey, 0, -1)
   yield lrange_result
   if not lrange_result.failed:
     taskstrs = lrange_result.read()
+  else:
+    redis_connected = false
+    break mainloop
   case cmd_type:
     of CommandType.LOCK_OFF:
       <<lock-off-confirm>>
@@ -240,6 +251,10 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       <<ultraviolet-on-confirm>>
     of CommandType.ULTRAVIOLET_OFF:
       <<ultraviolet-off-confirm>>
+    of CommandType.CAMERA_ON:
+      <<camera-on-confirm>>
+    of CommandType.CAMERA_OFF:
+      <<camera-off-confirm>>
     else:
       echo "Invalid command"
 #+end_src
@@ -291,9 +306,17 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     for j in 0..7:
       var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = await redis_client.setEx(skey, 30, "1")
+        var setex_result = redis_client.setEx(skey, 30, "1")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
       else:
-        var setex_result = await redis_client.setEx(skey, 30, "0")
+        var setex_result = redis_client.setEx(skey, 30, "0")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -324,9 +347,17 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     for j in 0..7:
       var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = await redis_client.setEx(skey, 30, "1")
+        var setex_result = redis_client.setEx(skey, 30, "1")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
       else:
-        var setex_result = await redis_client.setEx(skey, 30, "0")
+        var setex_result = redis_client.setEx(skey, 30, "0")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -469,13 +500,59 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       discard
 #+end_src
 
+* CAMERA-ON
+** 下行命令
+#+begin_src nim :noweb-ref camera-on
+  var camera_on: ref Parameter = new(Parameter)
+  var pkt = camera_on.encode_as(CommandType.CAMERA_ON, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send CAMERA_ON to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref camera-on-confirm
+  echo "confirm cmd type is CAMERA_ON"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "camera-on":
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+* CAMERA-OFF
+** 下行命令
+#+begin_src nim :noweb-ref camera-off
+  var camera_off: ref Parameter = new(Parameter)
+  var pkt = camera_off.encode_as(CommandType.CAMERA_OFF, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send CAMERA_OFF to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref camera-off-confirm
+  echo "confirm cmd type is CAMERA_OFF"
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "camera-off":
+        echo "remove task in queue: ", taskstr
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
+
 * 数据封包
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
   import parameter, zeropack
   import sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCK_STATUS = 5, INSIDE_LIGHT_ON = 6, INSIDE_LIGHT_OFF = 7, OUTSIDE_LIGHT_ON = 8, OUTSIDE_LIGHT_OFF = 9, ULTRAVIOLET_ON = 10, ULTRAVIOLET_OFF = 11, LOCK_DETECT = 12, CHARGER_STATUS = 13
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCK_STATUS = 5, LOCK_DETECT = 6, CHARGER_STATUS = 7, INSIDE_LIGHT_ON = 8, INSIDE_LIGHT_OFF = 9, OUTSIDE_LIGHT_ON = 10, OUTSIDE_LIGHT_OFF = 11, ULTRAVIOLET_ON = 12, ULTRAVIOLET_OFF = 13, CAMERA_ON = 14, CAMERA_OFF = 15
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
