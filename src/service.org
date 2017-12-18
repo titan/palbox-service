@@ -371,6 +371,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref inside-light-on
   var light_on: ref Parameter = new(Parameter)
+  light_on.pin = cast[int16](task["pin"].getNum())
   var pkt = light_on.encode_as(CommandType.INSIDE_LIGHT_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
@@ -393,6 +394,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref inside-light-off
   var light_off: ref Parameter = new(Parameter)
+  light_off.pin = cast[int16](task["pin"].getNum())
   var pkt = light_off.encode_as(CommandType.INSIDE_LIGHT_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
@@ -415,6 +417,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref outside-light-on
   var light_on: ref Parameter = new(Parameter)
+  light_on.pin = cast[int16](task["pin"].getNum())
   var pkt = light_on.encode_as(CommandType.OUTSIDE_LIGHT_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
@@ -437,6 +440,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref outside-light-off
   var light_off: ref Parameter = new(Parameter)
+  light_off.pin = cast[int16](task["pin"].getNum())
   var pkt = light_off.encode_as(CommandType.OUTSIDE_LIGHT_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
@@ -459,6 +463,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref ultraviolet-on
   var ultraviolet_on: ref Parameter = new(Parameter)
+  ultraviolet_on.pin = cast[int16](task["pin"].getNum())
   var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
@@ -481,6 +486,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref ultraviolet-off
   var ultraviolet_off: ref Parameter = new(Parameter)
+  ultraviolet_off.pin = cast[int16](task["pin"].getNum())
   var pkt = ultraviolet_off.encode_as(CommandType.ULTRAVIOLET_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
@@ -504,6 +510,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref camera-on
   var camera_on: ref Parameter = new(Parameter)
+  camera_on.pin = cast[int16](task["pin"].getNum())
   var pkt = camera_on.encode_as(CommandType.CAMERA_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
@@ -526,6 +533,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 ** 下行命令
 #+begin_src nim :noweb-ref camera-off
   var camera_off: ref Parameter = new(Parameter)
+  camera_off.pin = cast[int16](task["pin"].getNum())
   var pkt = camera_off.encode_as(CommandType.CAMERA_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
