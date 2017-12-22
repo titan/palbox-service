@@ -42,8 +42,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         var dst = task.sockaddr
         asyncCheck sendTo(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
-        #echo "Send ", len(encoded), " byte(s) to ", address
-        #echo encoded
+        echo "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
         #echo hexdump(task.data, len(task.data))
       else:
         await sleepAsync(1000)
@@ -145,6 +144,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                   <<camera-on>>
                 of "camera-off":
                   <<camera-off>>
+                of "charger-status":
+                  <<charger-status>>
                 else:
                   asyncCheck redis_client.rpop(taskkey)
             except:
@@ -255,6 +256,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       <<camera-on-confirm>>
     of CommandType.CAMERA_OFF:
       <<camera-off-confirm>>
+    of CommandType.CHARGER_STATUS:
+      <<charger-status-confirm>>
     else:
       echo "Invalid command"
 #+end_src
@@ -554,6 +557,37 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       discard
 #+end_src
 
+* CHARGER-STATUS
+** 下行命令
+#+begin_src nim :noweb-ref charger-status
+  var camera_off: ref Parameter = new(Parameter)
+  var pkt = camera_off.encode_as(CommandType.CHARGER_STATUS, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send CHARGER_STATUS to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref charger-status-confirm
+  echo "confirm cmd type is CHARGER_STATUS, charger0: ", param.chargers[0], ", charger1: ", param.chargers[1], ", charger2: ", param.chargers[2], ", charger3: ", param.chargers[3]
+  for i in 0..len(param.chargers) - 1:
+    var
+      state = param.chargers[i]
+      skey = "charger-status." & $uid & "." & $i
+      setex_result = redis_client.setEx(skey, 30, $state)
+    yield setex_result
+    if setex_result.failed():
+      redis_connected = false
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "charger-status":
+        echo "remove task in queue: ", taskstr
+        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+        break
+    except:
+      discard
+#+end_src
 * 数据封包
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
   import parameter, zeropack
