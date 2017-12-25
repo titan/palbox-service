@@ -10,7 +10,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 现连接断开，会自动重新连接。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
-  import asyncdispatch, asyncnet, base64, json, nativesockets, posix, redis, ringbuffer, strutils, tables, times
+  import asyncdispatch, asyncnet, base64, json, nativesockets, posix, redis, ringbuffer, sequtils, strutils, tables, times
   import box_servicepkg/box_packer, box_servicepkg/parameter
 
   <<hexdump>>
@@ -125,6 +125,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
               case task["command"].getStr():
                 of "lock-off":
                   <<lock-off>>
+                of "locks-off":
+                  <<locks-off>>
                 of "lock-status":
                   <<lock-status>>
                 of "lock-detect":
@@ -214,17 +216,18 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 2: CommandType.PONG
                  of 3: CommandType.CONFIRM
                  of 4: CommandType.LOCK_OFF
-                 of 5: CommandType.LOCK_STATUS
-                 of 6: CommandType.LOCK_DETECT
-                 of 7: CommandType.CHARGER_STATUS
-                 of 8: CommandType.INSIDE_LIGHT_ON
-                 of 9: CommandType.INSIDE_LIGHT_OFF
-                 of 10: CommandType.OUTSIDE_LIGHT_ON
-                 of 11: CommandType.OUTSIDE_LIGHT_OFF
-                 of 12: CommandType.ULTRAVIOLET_ON
-                 of 13: CommandType.ULTRAVIOLET_OFF
-                 of 14: CommandType.CAMERA_ON
-                 of 15: CommandType.CAMERA_OFF
+                 of 5: CommandType.LOCKS_OFF
+                 of 6: CommandType.LOCK_STATUS
+                 of 7: CommandType.LOCK_DETECT
+                 of 8: CommandType.CHARGER_STATUS
+                 of 9: CommandType.INSIDE_LIGHT_ON
+                 of 10: CommandType.INSIDE_LIGHT_OFF
+                 of 11: CommandType.OUTSIDE_LIGHT_ON
+                 of 12: CommandType.OUTSIDE_LIGHT_OFF
+                 of 13: CommandType.ULTRAVIOLET_ON
+                 of 14: CommandType.ULTRAVIOLET_OFF
+                 of 15: CommandType.CAMERA_ON
+                 of 16: CommandType.CAMERA_OFF
                  else: CommandType.UNKNOWN
   var taskstrs: seq[string] = @[]
   var lrange_result = redis_client.lRange(taskskey, 0, -1)
@@ -237,6 +240,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   case cmd_type:
     of CommandType.LOCK_OFF:
       <<lock-off-confirm>>
+    of CommandType.LOCKS_OFF:
+      <<locks-off-confirm>>
     of CommandType.LOCK_STATUS:
       <<lock-status-confirm>>
     of CommandType.LOCK_DETECT:
@@ -286,6 +291,35 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
         echo "Reomve from redis ", taskstr
         break
+    except:
+      discard
+#+end_src
+* LOCKS-OFF
+** 下行命令
+#+begin_src nim :noweb-ref locks-off
+  var locks_off: ref Parameter = new(Parameter)
+  locks_off.board = cast[int8](task["board"].getNum())
+  locks_off.locks = task["locks"].getElems().mapIt(cast[int8](it.getNum()))
+  locks_off.pins = task["pins"].getElems().mapIt(cast[int16](it.getNum()))
+  var pkt = locks_off.encode_as(CommandType.LOCKS_OFF, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send LOCKS_OFF to ", address
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref locks-off-confirm
+  echo "confirm cmd type is LOCKS_OFF, board: ", param.board, ", locks: ", param.locks.mapIt($it).join(",")
+  let locks = param.locks.foldl(a * b, 1)
+  for taskstr in taskstrs:
+    try:
+      let task = parseJson(taskstr)
+      if task["command"].getStr() == "locks-off" and cast[int8](task["board"].getNum()) == param.board:
+        let lockstmp = task["locks"].getElems().foldl(a * b.getNum(), 1'i64)
+        if locks == lockstmp:
+          asyncCheck redis_client.lRem(taskskey, taskstr, 1)
+          echo "Reomve from redis ", taskstr
+          break
     except:
       discard
 #+end_src
@@ -595,7 +629,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   import sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCK_STATUS = 5, LOCK_DETECT = 6, CHARGER_STATUS = 7, INSIDE_LIGHT_ON = 8, INSIDE_LIGHT_OFF = 9, OUTSIDE_LIGHT_ON = 10, OUTSIDE_LIGHT_OFF = 11, ULTRAVIOLET_ON = 12, ULTRAVIOLET_OFF = 13, CAMERA_ON = 14, CAMERA_OFF = 15
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, CHARGER_STATUS = 8, INSIDE_LIGHT_ON = 9, INSIDE_LIGHT_OFF = 10, OUTSIDE_LIGHT_ON = 11, OUTSIDE_LIGHT_OFF = 12, ULTRAVIOLET_ON = 13, ULTRAVIOLET_OFF = 14, CAMERA_ON = 15, CAMERA_OFF = 16
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID

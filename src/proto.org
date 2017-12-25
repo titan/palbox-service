@@ -1,22 +1,23 @@
 * PROTOCAL
 
-|                   | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers |
-|-------------------+------+-----+------+-----------+-------+------+--------+----------+----------|
-| PING              | ✓    | ✓   |      |           |       |      |        |          |          |
-| PONG              |      |     | ✓    | ✓         |       |      |        |          |          |
-| CONFIRM           |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          |
-| LOCK_OFF          |      |     |      |           | ✓     | ✓    |        |          |          |
-| LOCK_STATUS       |      |     |      |           | ✓     | [✓]  |        |          |          |
-| INSIDE_LIGHT_ON   |      |     |      |           |       |      |        |          |          |
-| INSIDE_LIGHT_OFF  |      |     |      |           |       |      |        |          |          |
-| OUTSIDE_LIGHT_ON  |      |     |      |           |       |      |        |          |          |
-| OUTSIDE_LIGHT_OFF |      |     |      |           |       |      |        |          |          |
-| ULTRAVIOLET_ON    |      |     |      |           |       |      |        |          |          |
-| ULTRAVIOLET_OFF   |      |     |      |           |       |      |        |          |          |
-| CAMERA_ON         |      |     |      |           |       |      |        |          |          |
-| CAMERA_OFF        |      |     |      |           |       |      |        |          |          |
-| BOX_STATUS        |      |     |      |           | ✓     | ✓    |        |          |          |
-| CHARGER_STATUS    |      |     |      |           |       |      |        |          | ✓        |
+|                   | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins |
+|-------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------|
+| PING              | ✓    | ✓   |      |           |       |      |        |          |          |       |      |
+| PONG              |      |     | ✓    | ✓         |       |      |        |          |          |       |      |
+| CONFIRM           |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          |       |      |
+| LOCK_OFF          |      |     |      |           | ✓     | ✓    |        |          |          |       |      |
+| LOCKS_OFF         |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |
+| LOCK_STATUS       |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |
+| LOCK_DETECT       |      |     |      |           | ✓     | ✓    |        |          |          |       |      |
+| INSIDE_LIGHT_ON   |      |     |      |           |       |      |        |          |          |       |      |
+| INSIDE_LIGHT_OFF  |      |     |      |           |       |      |        |          |          |       |      |
+| OUTSIDE_LIGHT_ON  |      |     |      |           |       |      |        |          |          |       |      |
+| OUTSIDE_LIGHT_OFF |      |     |      |           |       |      |        |          |          |       |      |
+| ULTRAVIOLET_ON    |      |     |      |           |       |      |        |          |          |       |      |
+| ULTRAVIOLET_OFF   |      |     |      |           |       |      |        |          |          |       |      |
+| CAMERA_ON         |      |     |      |           |       |      |        |          |          |       |      |
+| CAMERA_OFF        |      |     |      |           |       |      |        |          |          |       |      |
+| CHARGER_STATUS    |      |     |      |           |       |      |        |          | ✓        |       |      |
 
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
@@ -33,5 +34,7 @@
     (byte* 9 states) ;; 状态(和锁，测物条相关)
     (byte 10 cmd-type) ;; 确认命令类型
     (int* 11 chargers) ;; 充电器电流检测结果
+    (byte* 12 locks) ;; 锁编号列表
+    (short* 13 pins) ;; 开多个锁时的 PIN 列表
     )
 #+end_src
