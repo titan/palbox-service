@@ -18,7 +18,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   type
     Task = tuple[sockaddr: Sockaddr_in, data: seq[byte]]
 
-  var device_connections: Table[box_packer.UID, Sockaddr_in] = initTable[box_packer.UID, Sockaddr_in]()
+  var device_connections: Table[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]] = initTable[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]]()
   var task_buffer: RingBuffer[Task] = newRingBuffer[Task](bitsize = 10)
 
   proc prepareAddress(intaddr: uint32, intport: uint16): ptr Sockaddr_in =
@@ -102,7 +102,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         else:
           redis_connected = true
           redis_client = redis_result.read()
-      for uid, dst in device_connections.pairs():
+      for uid, expired_connection in device_connections.pairs():
+        let (expires_at, dst) = expired_connection
         let taskkey = "tasks." & $uid
         let lIndex_result = redis_client.lIndex(taskkey, -1)
         yield lIndex_result
@@ -680,7 +681,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 地址，主动给设备发送数据。
 
 #+begin_src nim :noweb-ref save-connections
-  device_connections[uid] = saddr
+  device_connections[uid] = (expires_at: epochTime().toInt(), sockaddr: saddr)
 #+end_src
 
 ** hexdump
