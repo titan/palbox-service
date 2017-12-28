@@ -69,6 +69,10 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         zeroMem(cast[pointer](addr(saddr)), sizeof(Sockaddr_in))
         let blen = await sock.recvFromInto(cast[pointer](rcvbuf), 1024, cast[ptr SockAddr](addr(saddr)), addr(slen))
         discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
+        var received = ""
+        for i in 0..blen - 1:
+          received &= chr(rcvbuf[i])
+        echo "Received ", blen, " bytes: ", received
         let rcvd: string = base64.decode($cast[cstring](rcvbuf))
         for i in 0..len(rcvd) - 1:
           rcvbuf[i] = ord(rcvd[i])
