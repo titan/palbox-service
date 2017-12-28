@@ -135,14 +135,14 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                   <<lock-status>>
                 of "lock-detect":
                   <<lock-detect>>
-                of "inside-light-on":
-                  <<inside-light-on>>
-                of "inside-light-off":
-                  <<inside-light-off>>
-                of "outside-light-on":
-                  <<outside-light-on>>
-                of "outside-light-off":
-                  <<outside-light-off>>
+                of "light-on":
+                  <<light-on>>
+                of "light-off":
+                  <<light-off>>
+                of "fan-on":
+                  <<fan-on>>
+                of "fan-off":
+                  <<fan-off>>
                 of "ultraviolet-on":
                   <<ultraviolet-on>>
                 of "ultraviolet-off":
@@ -224,10 +224,10 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 6: CommandType.LOCK_STATUS
                  of 7: CommandType.LOCK_DETECT
                  of 8: CommandType.CHARGER_STATUS
-                 of 9: CommandType.INSIDE_LIGHT_ON
-                 of 10: CommandType.INSIDE_LIGHT_OFF
-                 of 11: CommandType.OUTSIDE_LIGHT_ON
-                 of 12: CommandType.OUTSIDE_LIGHT_OFF
+                 of 9: CommandType.LIGHT_ON
+                 of 10: CommandType.LIGHT_OFF
+                 of 11: CommandType.FAN_ON
+                 of 12: CommandType.FAN_OFF
                  of 13: CommandType.ULTRAVIOLET_ON
                  of 14: CommandType.ULTRAVIOLET_OFF
                  of 15: CommandType.CAMERA_ON
@@ -250,14 +250,14 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       <<lock-status-confirm>>
     of CommandType.LOCK_DETECT:
       <<lock-detect-confirm>>
-    of CommandType.INSIDE_LIGHT_ON:
-      <<inside-light-on-confirm>>
-    of CommandType.INSIDE_LIGHT_OFF:
-      <<inside-light-off-confirm>>
-    of CommandType.OUTSIDE_LIGHT_ON:
-      <<outside-light-on-confirm>>
-    of CommandType.OUTSIDE_LIGHT_OFF:
-      <<outside-light-off-confirm>>
+    of CommandType.LIGHT_ON:
+      <<light-on-confirm>>
+    of CommandType.LIGHT_OFF:
+      <<light-off-confirm>>
+    of CommandType.FAN_ON:
+      <<fan-on-confirm>>
+    of CommandType.FAN_OFF:
+      <<fan-off-confirm>>
     of CommandType.ULTRAVIOLET_ON:
       <<ultraviolet-on-confirm>>
     of CommandType.ULTRAVIOLET_OFF:
@@ -409,93 +409,93 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     except:
       discard
 #+end_src
-* INSIDE-LIGHT-ON
+* LIGHT-ON
 ** 下行命令
-#+begin_src nim :noweb-ref inside-light-on
+#+begin_src nim :noweb-ref light-on
   var light_on: ref Parameter = new(Parameter)
   light_on.pin = cast[int16](task["pin"].getNum())
-  var pkt = light_on.encode_as(CommandType.INSIDE_LIGHT_ON, uid)
+  var pkt = light_on.encode_as(CommandType.LIGHT_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send INSIDE_LIGHT_ON to ", address
+  echo "Prepare to send LIGHT_ON to ", address
 #+end_src
 ** 上行响应
-#+begin_src nim :noweb-ref inside-light-on-confirm
-  echo "confirm cmd type is INSIDE_LIGHT_ON"
+#+begin_src nim :noweb-ref light-on-confirm
+  echo "confirm cmd type is LIGHT_ON"
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
-      if task["command"].getStr() == "inside-light-on":
+      if task["command"].getStr() == "light-on":
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
         break
     except:
       discard
 #+end_src
-* INSIDE-LIGHT-OFF
+* LIGHT-OFF
 ** 下行命令
-#+begin_src nim :noweb-ref inside-light-off
+#+begin_src nim :noweb-ref light-off
   var light_off: ref Parameter = new(Parameter)
   light_off.pin = cast[int16](task["pin"].getNum())
-  var pkt = light_off.encode_as(CommandType.INSIDE_LIGHT_OFF, uid)
+  var pkt = light_off.encode_as(CommandType.LIGHT_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send INSIDE_LIGHT_Off to ", address
+  echo "Prepare to send LIGHT_Off to ", address
 #+end_src
 ** 上行响应
-#+begin_src nim :noweb-ref inside-light-off-confirm
-  echo "confirm cmd type is INSIDE_LIGHT_OFF"
+#+begin_src nim :noweb-ref light-off-confirm
+  echo "confirm cmd type is LIGHT_OFF"
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
-      if task["command"].getStr() == "inside-light-off":
+      if task["command"].getStr() == "light-off":
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
         break
     except:
       discard
 #+end_src
-* OUTSIDE-LIGHT-ON
+* FAN-ON
 ** 下行命令
-#+begin_src nim :noweb-ref outside-light-on
-  var light_on: ref Parameter = new(Parameter)
-  light_on.pin = cast[int16](task["pin"].getNum())
-  var pkt = light_on.encode_as(CommandType.OUTSIDE_LIGHT_ON, uid)
+#+begin_src nim :noweb-ref fan-on
+  var fan_on: ref Parameter = new(Parameter)
+  fan_on.pin = cast[int16](task["pin"].getNum())
+  var pkt = fan_on.encode_as(CommandType.FAN_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send OUTSIDE_LIGHT_ON to ", address
+  echo "Prepare to send FAN_ON to ", address
 #+end_src
 ** 上行响应
-#+begin_src nim :noweb-ref outside-light-on-confirm
-  echo "confirm cmd type is OUTSIDE_LIGHT_ON"
+#+begin_src nim :noweb-ref fan-on-confirm
+  echo "confirm cmd type is FAN_ON"
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
-      if task["command"].getStr() == "outside-light-on":
+      if task["command"].getStr() == "fan-on":
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
         break
     except:
       discard
 #+end_src
-* OUTSIDE-LIGHT-OFF
+* FAN-OFF
 ** 下行命令
-#+begin_src nim :noweb-ref outside-light-off
-  var light_off: ref Parameter = new(Parameter)
-  light_off.pin = cast[int16](task["pin"].getNum())
-  var pkt = light_off.encode_as(CommandType.OUTSIDE_LIGHT_OFF, uid)
+#+begin_src nim :noweb-ref fan-off
+  var fan_off: ref Parameter = new(Parameter)
+  fan_off.pin = cast[int16](task["pin"].getNum())
+  var pkt = fan_off.encode_as(CommandType.FAN_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send OUTSIDE_LIGHT_Off to ", address
+  echo "Prepare to send FAN_Off to ", address
 #+end_src
 ** 上行响应
-#+begin_src nim :noweb-ref outside-light-off-confirm
-  echo "confirm cmd type is OUTSIDE_LIGHT_OFF"
+#+begin_src nim :noweb-ref fan-off-confirm
+  echo "confirm cmd type is FAN_OFF"
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
-      if task["command"].getStr() == "outside-light-off":
+      if task["command"].getStr() == "fan-off":
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
         break
     except:
@@ -633,7 +633,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   import sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, CHARGER_STATUS = 8, INSIDE_LIGHT_ON = 9, INSIDE_LIGHT_OFF = 10, OUTSIDE_LIGHT_ON = 11, OUTSIDE_LIGHT_OFF = 12, ULTRAVIOLET_ON = 13, ULTRAVIOLET_OFF = 14, CAMERA_ON = 15, CAMERA_OFF = 16
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, CHARGER_STATUS = 8, LIGHT_ON = 9, LIGHT_OFF = 10, FAN_ON = 11, FAN_OFF = 12, ULTRAVIOLET_ON = 13, ULTRAVIOLET_OFF = 14, CAMERA_ON = 15, CAMERA_OFF = 16
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
