@@ -135,6 +135,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                   <<lock-status>>
                 of "lock-detect":
                   <<lock-detect>>
+                of "lock-status-detect":
+                  <<lock-status-detect>>
                 of "light-on":
                   <<light-on>>
                 of "light-off":
@@ -223,15 +225,16 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 5: CommandType.LOCKS_OFF
                  of 6: CommandType.LOCK_STATUS
                  of 7: CommandType.LOCK_DETECT
-                 of 8: CommandType.CHARGER_STATUS
-                 of 9: CommandType.LIGHT_ON
-                 of 10: CommandType.LIGHT_OFF
-                 of 11: CommandType.FAN_ON
-                 of 12: CommandType.FAN_OFF
-                 of 13: CommandType.ULTRAVIOLET_ON
-                 of 14: CommandType.ULTRAVIOLET_OFF
-                 of 15: CommandType.CAMERA_ON
-                 of 16: CommandType.CAMERA_OFF
+                 of 8: CommandType.LOCK_STATUS_DETECT
+                 of 9: CommandType.CHARGER_STATUS
+                 of 10: CommandType.LIGHT_ON
+                 of 11: CommandType.LIGHT_OFF
+                 of 12: CommandType.FAN_ON
+                 of 13: CommandType.FAN_OFF
+                 of 14: CommandType.ULTRAVIOLET_ON
+                 of 15: CommandType.ULTRAVIOLET_OFF
+                 of 16: CommandType.CAMERA_ON
+                 of 17: CommandType.CAMERA_OFF
                  else: CommandType.UNKNOWN
   var taskstrs: seq[string] = @[]
   var lrange_result = redis_client.lRange(taskskey, 0, -1)
@@ -250,6 +253,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       <<lock-status-confirm>>
     of CommandType.LOCK_DETECT:
       <<lock-detect-confirm>>
+    of CommandType.LOCK_STATUS_DETECT:
+      <<lock-status-detect-confirm>>
     of CommandType.LIGHT_ON:
       <<light-on-confirm>>
     of CommandType.LIGHT_OFF:
@@ -408,6 +413,69 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         break
     except:
       discard
+#+end_src
+* LOCK-STATUS-DETECT
+** 下行命令
+#+begin_src nim :noweb-ref lock-status-detect
+  var lock_status: ref Parameter = new(Parameter)
+  lock_status.board = cast[int8](task["board"].getNum())
+  lock_status.lock = cast[int8](task["lock"].getNum())
+  lock_status.pin = cast[int16](task["pin"].getNum())
+  var pkt = lock_status.encode_as(CommandType.LOCK_STATUS_DETECT, uid)
+  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var dstaddr = dst
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  echo "Prepare to send LOCK_STATUS_DETECT to ", address
+#+end_src
+** 上行响应
+
+响应里包括两个部分的数据，states 里存放的是锁的状态，locks 里存放的是测物条的状态
+
+#+begin_src nim :noweb-ref lock-status-detect-confirm
+  echo "confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board, ", lock: ", param.lock
+  for i in 0..len(param.states) - 1:
+    var state = param.states[i]
+    for j in 0..7:
+      var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
+      if ((1 shl j) and state) != 0:
+        var setex_result = redis_client.setEx(skey, 5, "1")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+      else:
+        let setex_result = redis_client.setEx(skey, 5, "0")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+  for i in 0..len(param.locks) - 1:
+    var state = param.locks[i]
+    for j in 0..7:
+      var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.locks) - 1 - i) * 8 + j + 1)
+      if ((1 shl j) and state) != 0:
+        var setex_result = redis_client.setEx(skey, 5, "1")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+      else:
+        var setex_result = redis_client.setEx(skey, 5, "0")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr)
+               except: nil
+    if task == nil:
+      continue
+    elif task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
+      let rem_result = redis_client.lRem(taskskey, taskstr, 1)
+      yield rem_result
+      if rem_result.failed():
+        redis_connected = false
+        break mainloop
 #+end_src
 * LIGHT-ON
 ** 下行命令
@@ -633,7 +701,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   import sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, CHARGER_STATUS = 8, LIGHT_ON = 9, LIGHT_OFF = 10, FAN_ON = 11, FAN_OFF = 12, ULTRAVIOLET_ON = 13, ULTRAVIOLET_OFF = 14, CAMERA_ON = 15, CAMERA_OFF = 16
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID

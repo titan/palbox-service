@@ -1,23 +1,24 @@
 * PROTOCAL
 
-|                 | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins |
-|-----------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------|
-| PING            | ✓    | ✓   |      |           |       |      |        |          |          |       |      |
-| PONG            |      |     | ✓    | ✓         |       |      |        |          |          |       |      |
-| CONFIRM         |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          |       |      |
-| LOCK_OFF        |      |     |      |           | ✓     | ✓    |        |          |          |       |      |
-| LOCKS_OFF       |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |
-| LOCK_STATUS     |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |
-| LOCK_DETECT     |      |     |      |           | ✓     | ✓    |        |          |          |       |      |
-| LIGHT_ON        |      |     |      |           |       |      |        |          |          |       |      |
-| LIGHT_OFF       |      |     |      |           |       |      |        |          |          |       |      |
-| FAN_ON          |      |     |      |           |       |      |        |          |          |       |      |
-| FAN_OFF         |      |     |      |           |       |      |        |          |          |       |      |
-| ULTRAVIOLET_ON  |      |     |      |           |       |      |        |          |          |       |      |
-| ULTRAVIOLET_OFF |      |     |      |           |       |      |        |          |          |       |      |
-| CAMERA_ON       |      |     |      |           |       |      |        |          |          |       |      |
-| CAMERA_OFF      |      |     |      |           |       |      |        |          |          |       |      |
-| CHARGER_STATUS  |      |     |      |           |       |      |        |          | ✓        |       |      |
+|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins |
+|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------|
+| PING               | ✓    | ✓   |      |           |       |      |        |          |          |       |      |
+| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |
+| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          |       |      |
+| LOCK_OFF           |      |     |      |           | ✓     | ✓    |        |          |          |       |      |
+| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |
+| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |
+| LOCK_DETECT        |      |     |      |           | ✓     | ✓    |        |          |          |       |      |
+| LOCK_STATUS_DETECT |      |     |      |           | ✓     | ✓    |        |          |          |       |      |
+| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |
+| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |
+| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |
+| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |
+| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |
+| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |
+| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |
+| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |
+| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |
 
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
