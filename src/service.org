@@ -27,6 +27,15 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     result.sin_port = nativesockets.htons(intport)
     result.sin_addr.s_addr = nativesockets.htonl(intaddr)
 
+
+#+end_src
+
+** send
+
+发送任务数据到设备。发送任务检查 task_buffer 中的发送数据，有任务就发送到对应的
+设备，没有就休眠 1 秒。
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc send_always(sock: AsyncFD) {.async.} =
     var
       sndbuf: ref array[1024, byte] = new(array[1024, byte])
@@ -46,7 +55,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         #echo hexdump(task.data, len(task.data))
       else:
         await sleepAsync(1000)
+#+end_src
 
+** receive
+
+从设备接收数据。
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc receive_always(sock: AsyncFD) {.async.} =
     var
       rcvbuf: ref array[1024, byte] = new(array[1024, byte])
@@ -90,8 +105,14 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
               echo "Receive UNKNOWN from ", address
         else:
           echo "Receive invalid packet from ", address
+#+end_src
 
+** check task
 
+检查任务队列。第一步，从已经建立连接的设备任务队列中获取任务，如果任务过期了，就
+不发送任务；否则，就根据任务的类型将任务填充到 task_buffer 中。
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc check_always() {.async.} =
     var
       redis_client: AsyncRedis
@@ -162,7 +183,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
               echo getCurrentExceptionMsg()
               asyncCheck redis_client.rpop(taskkey)
       await sleepAsync(1000)
+#+end_src
 
+** serve
+
+启动程序
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc serve() =
     var
       name = prepareAddress(INADDR_ANY, 5008)
@@ -177,7 +204,6 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     run_forever()
 
   serve()
-
 #+end_src
 
 * PING
@@ -203,7 +229,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   pong_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = pong_param.encode_as(CommandType.PONG, uid)
   discard task_buffer.add((sockaddr: saddr, data: pkt))
-  echo "Prepare to send PONG to ", address
+  echo "Prepare to send PONG to ", uid, " @ ", address
 #+end_src
 * CONFIRM
 收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
