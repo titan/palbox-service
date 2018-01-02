@@ -127,61 +127,72 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         else:
           redis_connected = true
           redis_client = redis_result.read()
-      for uid, expired_connection in device_connections.pairs():
-        let (expires_at, dst) = expired_connection
-        let taskkey = "tasks." & $uid
-        let lIndex_result = redis_client.lIndex(taskkey, -1)
-        yield lIndex_result
-        if lIndex_result.failed():
-          redis_connected = false
-          break
-        else:
-          let taskstr = lIndex_result.read()
-          if taskstr == redisNil:
-            continue
+      let keys_result = redis_client.keys("tasks.*")
+      yield keys_result
+      if keys_result.failed():
+        redis_connected = false
+        await sleepAsync(1000)
+      else:
+        let taskkeys = keys_result.read()
+        for taskkey in taskkeys:
+          let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
+          var expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in]
+          let lIndex_result = redis_client.lIndex(taskkey, -1)
+          yield lIndex_result
+          if lIndex_result.failed():
+            redis_connected = false
+            break
           else:
-            echo "found task for ", $uid
-            try:
-              let task = parseJson(taskstr)
-              if task["expires-at"].getNum() < epochTime().toInt():
+            let taskstr = lIndex_result.read()
+            if taskstr == redisNil:
+              continue
+            else:
+              let task = try: parseJson(taskstr)
+                         except: nil
+              if task == nil or task["expires-at"].getNum() < epochTime().toInt():
                 asyncCheck redis_client.lrem(taskkey, taskstr, 1)
-                echo "remove expired task in ", taskkey, ": ", taskstr
-                continue
-              case task["command"].getStr():
-                of "lock-off":
-                  <<lock-off>>
-                of "locks-off":
-                  <<locks-off>>
-                of "lock-status":
-                  <<lock-status>>
-                of "lock-detect":
-                  <<lock-detect>>
-                of "lock-status-detect":
-                  <<lock-status-detect>>
-                of "light-on":
-                  <<light-on>>
-                of "light-off":
-                  <<light-off>>
-                of "fan-on":
-                  <<fan-on>>
-                of "fan-off":
-                  <<fan-off>>
-                of "ultraviolet-on":
-                  <<ultraviolet-on>>
-                of "ultraviolet-off":
-                  <<ultraviolet-off>>
-                of "camera-on":
-                  <<camera-on>>
-                of "camera-off":
-                  <<camera-off>>
-                of "charger-status":
-                  <<charger-status>>
+                echo "Remove expired task in ", taskkey, ": ", taskstr
+              else:
+                if not device_connections.take(uid, expired_connection):
+                  continue
+                let (expires_at, dst) = expired_connection
+                if expires_at < epochTime().toInt():
+                  echo "Connection of uid ", uid, " is expired"
+                  device_connections.del(uid)
                 else:
-                  asyncCheck redis_client.rpop(taskkey)
-            except:
-              echo "Something wrong, then remove the oldest task in ", taskkey
-              echo getCurrentExceptionMsg()
-              asyncCheck redis_client.rpop(taskkey)
+                  echo "Found task for ", $uid
+                  case task["command"].getStr():
+                    of "lock-off":
+                      <<lock-off>>
+                    of "locks-off":
+                      <<locks-off>>
+                    of "lock-status":
+                      <<lock-status>>
+                    of "lock-detect":
+                      <<lock-detect>>
+                    of "lock-status-detect":
+                      <<lock-status-detect>>
+                    of "light-on":
+                      <<light-on>>
+                    of "light-off":
+                      <<light-off>>
+                    of "fan-on":
+                      <<fan-on>>
+                    of "fan-off":
+                      <<fan-off>>
+                    of "ultraviolet-on":
+                      <<ultraviolet-on>>
+                    of "ultraviolet-off":
+                      <<ultraviolet-off>>
+                    of "camera-on":
+                      <<camera-on>>
+                    of "camera-off":
+                      <<camera-off>>
+                    of "charger-status":
+                      <<charger-status>>
+                    else:
+                      asyncCheck redis_client.rpop(taskkey)
+
       await sleepAsync(1000)
 #+end_src
 
@@ -725,6 +736,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
   import parameter, zeropack
   import sequtils, strutils
+  import hashes
   type
     CommandType* {.pure.} = enum
       UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17
@@ -740,6 +752,29 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 
   proc `$`*(uid: UID): string =
     return uid.mapIt(toHex(cast[BiggestInt](it), 2)).join("-")
+
+  proc hash*(x: UID): Hash =
+    let
+      byte0 = x[0] xor x[4] xor x[8]
+      byte1 = x[1] xor x[5] xor x[9]
+      byte2 = x[2] xor x[6] xor x[10]
+      byte3 = x[3] xor x[7] xor x[11]
+    result = (cast[int](byte0) shl 24) + (cast[int](byte1) shl 16) + (cast[int](byte2) shl 8) + cast[int](byte3)
+
+  proc parseUID*(uidstr: string): UID =
+    let bytes = uidstr.split('-').mapIt(cast[byte](parseHexInt(it)))
+    result[0] = bytes[0]
+    result[1] = bytes[1]
+    result[2] = bytes[2]
+    result[3] = bytes[3]
+    result[4] = bytes[4]
+    result[5] = bytes[5]
+    result[6] = bytes[6]
+    result[7] = bytes[7]
+    result[8] = bytes[8]
+    result[9] = bytes[9]
+    result[10] = bytes[10]
+    result[11] = bytes[11]
 
   proc crc8(buf: seq[byte], offset: int, len: int): uint8 =
     var bptr = offset
@@ -813,7 +848,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 地址，主动给设备发送数据。同时把设备的地址加入到当前活跃设备集合中。
 
 #+begin_src nim :noweb-ref save-connections
-  device_connections[uid] = (expires_at: epochTime().toInt(), sockaddr: saddr)
+  device_connections[uid] = (expires_at: epochTime().toInt() + 60 * 1024, sockaddr: saddr)
   let activated_key = "box.activated." & getDateStr() & "." & $getLocalTime(getTime()).hour
   var sadd_result = redis_client.sAdd(activated_key, $uid)
   yield sadd_result
