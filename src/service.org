@@ -288,7 +288,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_OFF to ", address
+  echo "Prepare to send LOCK_OFF to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-off-confirm
@@ -314,7 +314,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCKS_OFF to ", address
+  echo "Prepare to send LOCKS_OFF to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref locks-off-confirm
@@ -343,7 +343,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_STATUS to ", address
+  echo "Prepare to send LOCK_STATUS to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
@@ -384,7 +384,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_DETECT to ", address
+  echo "Prepare to send LOCK_DETECT to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-detect-confirm
@@ -425,7 +425,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_STATUS_DETECT to ", address
+  echo "Prepare to send LOCK_STATUS_DETECT to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 
@@ -486,7 +486,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LIGHT_ON to ", address
+  echo "Prepare to send LIGHT_ON to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-on-confirm
@@ -509,7 +509,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LIGHT_Off to ", address
+  echo "Prepare to send LIGHT_Off to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-off-confirm
@@ -532,7 +532,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send FAN_ON to ", address
+  echo "Prepare to send FAN_ON to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-on-confirm
@@ -555,7 +555,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send FAN_Off to ", address
+  echo "Prepare to send FAN_Off to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-off-confirm
@@ -578,7 +578,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send ULTRAVIOLET_ON to ", address
+  echo "Prepare to send ULTRAVIOLET_ON to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-on-confirm
@@ -601,7 +601,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send ULTRAVIOLET_OFF to ", address
+  echo "Prepare to send ULTRAVIOLET_OFF to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-off-confirm
@@ -625,7 +625,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send CAMERA_ON to ", address
+  echo "Prepare to send CAMERA_ON to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-on-confirm
@@ -648,7 +648,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send CAMERA_OFF to ", address
+  echo "Prepare to send CAMERA_OFF to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-off-confirm
@@ -672,7 +672,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send CHARGER_STATUS to ", address
+  echo "Prepare to send CHARGER_STATUS to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
