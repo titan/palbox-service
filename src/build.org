@@ -142,3 +142,20 @@ wait_for "$@"
   #! /bin/sh
   docker rmi <<tag>>
 #+end_src
+* 启动脚本
+
+启动脚本基于 supervisor 来编写
+
+#+begin_src conf :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/box-service.ini
+  [program:box-service]
+  command=/opt/box-service/box_service
+  directory=/opt/box-service/
+  user=nobody
+  redirect_stderr=false
+  stdout_logfile=AUTO
+  stdout_capture_maxbytes=1MB
+  stdout_events_enabled=false
+  stderr_logfile=AUTO
+  stderr_capture_maxbytes=1MB
+  stderr_events_enabled=false
+#+end_src
