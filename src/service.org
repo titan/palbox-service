@@ -713,11 +713,11 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
-  echo "confirm cmd type is CHARGER_STATUS, charger0: ", param.chargers[0], ", charger1: ", param.chargers[1], ", charger2: ", param.chargers[2], ", charger3: ", param.chargers[3]
+  echo "confirm cmd type is CHARGER_STATUS, charger1: ", param.chargers[0], ", charger2: ", param.chargers[1], ", charger3: ", param.chargers[2], ", charger4: ", param.chargers[3]
   for i in 0..len(param.chargers) - 1:
     var
       state = param.chargers[i]
-      skey = "charger-status." & $uid & "." & $i
+      skey = "charger-status." & $uid & "." & $(i + 1)
       setex_result = redis_client.setEx(skey, 30, $state)
     yield setex_result
     if setex_result.failed():
