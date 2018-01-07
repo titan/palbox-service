@@ -49,7 +49,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         for i in 0..(len(encoded) - 1):
           sndbuf[i] = ord(encoded[i])
         var dst = task.sockaddr
-        asyncCheck sendTo(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
+        await sendTo(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
         echo "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
         #echo hexdump(task.data, len(task.data))
@@ -135,63 +135,63 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       else:
         let taskkeys = keys_result.read()
         for taskkey in taskkeys:
-          let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
-          var expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in]
-          let lIndex_result = redis_client.lIndex(taskkey, -1)
-          yield lIndex_result
-          if lIndex_result.failed():
-            redis_connected = false
-            break
+          if len(taskkey) != 41:
+            echo "invalid taskkey ", taskkey
+            continue
+          let taskstr = await redis_client.lIndex(taskkey, -1)
+          if taskstr == redisNil:
+            echo "Got nothing in task queue"
+            continue
           else:
-            let taskstr = lIndex_result.read()
-            if taskstr == redisNil:
-              continue
+            let task = try: parseJson(taskstr)
+                       except: nil
+            if task == nil or task["expires-at"].getNum() < epochTime().toInt():
+              asyncCheck redis_client.lrem(taskkey, taskstr, 1)
+              echo "Remove expired task in ", taskkey, ": ", taskstr
             else:
-              let task = try: parseJson(taskstr)
-                         except: nil
-              if task == nil or task["expires-at"].getNum() < epochTime().toInt():
-                asyncCheck redis_client.lrem(taskkey, taskstr, 1)
-                echo "Remove expired task in ", taskkey, ": ", taskstr
+              let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
+              if not device_connections.contains(uid):
+                echo "Connection for uid ", uid, " is missing"
+                continue
+              let
+                expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in] = device_connections[uid]
+                (expires_at, dst) = expired_connection
+              if expires_at < epochTime().toInt():
+                echo "Connection of uid ", uid, " is expired"
+                device_connections.del(uid)
               else:
-                if not device_connections.take(uid, expired_connection):
-                  continue
-                let (expires_at, dst) = expired_connection
-                if expires_at < epochTime().toInt():
-                  echo "Connection of uid ", uid, " is expired"
-                  device_connections.del(uid)
-                else:
-                  echo "Found task for ", $uid
-                  case task["command"].getStr():
-                    of "lock-off":
-                      <<lock-off>>
-                    of "locks-off":
-                      <<locks-off>>
-                    of "lock-status":
-                      <<lock-status>>
-                    of "lock-detect":
-                      <<lock-detect>>
-                    of "lock-status-detect":
-                      <<lock-status-detect>>
-                    of "light-on":
-                      <<light-on>>
-                    of "light-off":
-                      <<light-off>>
-                    of "fan-on":
-                      <<fan-on>>
-                    of "fan-off":
-                      <<fan-off>>
-                    of "ultraviolet-on":
-                      <<ultraviolet-on>>
-                    of "ultraviolet-off":
-                      <<ultraviolet-off>>
-                    of "camera-on":
-                      <<camera-on>>
-                    of "camera-off":
-                      <<camera-off>>
-                    of "charger-status":
-                      <<charger-status>>
-                    else:
-                      asyncCheck redis_client.rpop(taskkey)
+                echo "Found task for ", $uid
+                case task["command"].getStr():
+                  of "lock-off":
+                    <<lock-off>>
+                  of "locks-off":
+                    <<locks-off>>
+                  of "lock-status":
+                    <<lock-status>>
+                  of "lock-detect":
+                    <<lock-detect>>
+                  of "lock-status-detect":
+                    <<lock-status-detect>>
+                  of "light-on":
+                    <<light-on>>
+                  of "light-off":
+                    <<light-off>>
+                  of "fan-on":
+                    <<fan-on>>
+                  of "fan-off":
+                    <<fan-off>>
+                  of "ultraviolet-on":
+                    <<ultraviolet-on>>
+                  of "ultraviolet-off":
+                    <<ultraviolet-off>>
+                  of "camera-on":
+                    <<camera-on>>
+                  of "camera-off":
+                    <<camera-off>>
+                  of "charger-status":
+                    <<charger-status>>
+                  else:
+                    asyncCheck redis_client.rpop(taskkey)
 
       await sleepAsync(1000)
 #+end_src
