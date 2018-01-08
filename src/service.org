@@ -374,7 +374,6 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+begin_src nim :noweb-ref lock-status
   var lock_status: ref Parameter = new(Parameter)
   lock_status.board = cast[int8](task["board"].getNum())
-  lock_status.lock = cast[int8](task["lock"].getNum())
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
@@ -415,7 +414,6 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+begin_src nim :noweb-ref lock-detect
   var lock_status: ref Parameter = new(Parameter)
   lock_status.board = cast[int8](task["board"].getNum())
-  lock_status.lock = cast[int8](task["lock"].getNum())
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_DETECT, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
@@ -456,7 +454,6 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+begin_src nim :noweb-ref lock-status-detect
   var lock_status: ref Parameter = new(Parameter)
   lock_status.board = cast[int8](task["board"].getNum())
-  lock_status.lock = cast[int8](task["lock"].getNum())
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS_DETECT, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
@@ -469,7 +466,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 响应里包括两个部分的数据，states 里存放的是锁的状态，locks 里存放的是测物条的状态
 
 #+begin_src nim :noweb-ref lock-status-detect-confirm
-  echo "confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board, ", lock: ", param.lock
+  echo "confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -507,7 +504,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                except: nil
     if task == nil:
       continue
-    elif task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
+    elif task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board:
       let rem_result = redis_client.lRem(taskskey, taskstr, 1)
       yield rem_result
       if rem_result.failed():
