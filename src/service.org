@@ -101,6 +101,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
             of CommandType.CONFIRM:
               echo "Receive CONFIRM from ", address
               <<confirm>>
+            of CommandType.LOCK_DATA:
+              echo "Receive LOCK_DATA from ", address
+              <<lock-data>>
             else:
               echo "Receive UNKNOWN from ", address
         else:
@@ -272,6 +275,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 15: CommandType.ULTRAVIOLET_OFF
                  of 16: CommandType.CAMERA_ON
                  of 17: CommandType.CAMERA_OFF
+                 of 18: CommandType.LOCK_DATA
                  else: CommandType.UNKNOWN
   var taskstrs: seq[string] = @[]
   var lrange_result = redis_client.lRange(taskskey, 0, -1)
@@ -466,7 +470,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 响应里包括两个部分的数据，states 里存放的是锁的状态，locks 里存放的是测物条的状态
 
 #+begin_src nim :noweb-ref lock-status-detect-confirm
-  echo "confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board
+  echo "confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -511,6 +515,67 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         redis_connected = false
         break mainloop
 #+end_src
+* LOCK-DATA
+设备定时把锁控板的状态和测物条的状态上报给服务端，服务端把这些状态同步到缓存中。
+** 上行命令
+#+begin_src nim :noweb-ref lock-data
+  let
+    uid = data.uid
+    param = data.parameter
+    sn = param.sn
+    now = cast[int]((epochTime() * 1000).toInt() shr 10)
+    timestamp = cast[int](param.timestamp shr 10)
+    expires_at = if now > timestamp: 5 else: timestamp - now
+  <<save-connections>>
+
+  echo "LOCK-DATA, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
+  for i in 0..len(param.states) - 1:
+    var state = param.states[i]
+    for j in 0..7:
+      var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
+      if ((1 shl j) and state) != 0:
+        var setex_result = redis_client.setEx(skey, expires_at, "1")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+      else:
+        let setex_result = redis_client.setEx(skey, expires_at, "0")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+  for i in 0..len(param.locks) - 1:
+    var state = param.locks[i]
+    for j in 0..7:
+      var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.locks) - 1 - i) * 8 + j + 1)
+      if ((1 shl j) and state) != 0:
+        var setex_result = redis_client.setEx(skey, expires_at, "1")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+      else:
+        var setex_result = redis_client.setEx(skey, expires_at, "0")
+        yield setex_result
+        if setex_result.failed():
+          redis_connected = false
+          break mainloop
+  <<lock-data-confirm>>
+#+end_src
+** 下行响应
+#+begin_src nim :noweb-ref lock-data-confirm
+  var confirm_param: ref Parameter = new(Parameter)
+  confirm_param.sn = sn
+  confirm_param.version = 0
+  confirm_param.cmd_type = 18 # CommandType.LOCK_DATA
+  confirm_param.zone = 8 * 60 * 60 * 1000
+  confirm_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = confirm_param.encode_as(CommandType.CONFIRM, uid)
+  discard task_buffer.add((sockaddr: saddr, data: pkt))
+  echo "Prepare to send CONFIRM of LOCK_DATA to ", uid, " @ ", address
+#+end_src
+
 * LIGHT-ON
 ** 下行命令
 #+begin_src nim :noweb-ref light-on
@@ -736,7 +801,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   import hashes
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
@@ -834,6 +899,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         result = PackResult(cmd_type: CommandType.PING, uid: uid, parameter: parameter.decode_from(unzipped, 0))
       of 3:
         result = PackResult(cmd_type: CommandType.CONFIRM, uid: uid, parameter: parameter.decode_from(unzipped, 0))
+      of 18:
+        result = PackResult(cmd_type: CommandType.LOCK_DATA, uid: uid, parameter: parameter.decode_from(unzipped, 0))
       else:
         echo "command type is invalid\n"
         return nil
