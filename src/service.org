@@ -301,7 +301,6 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 17: CommandType.CAMERA_OFF
                  of 18: CommandType.LOCK_DATA
                  else: CommandType.UNKNOWN
-  info "origin confirm type: ", cmd_type
   flushFile(stdout)
   var taskstrs: seq[string] = @[]
   var lrange_result = redis_client.lRange(taskskey, 0, -1)
@@ -341,7 +340,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     of CommandType.CHARGER_STATUS:
       <<charger-status-confirm>>
     else:
-      warn "Invalid command"
+      warn "Invalid command ", param.cmd_type
       flushFile(stdout)
 #+end_src
 
