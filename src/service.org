@@ -10,7 +10,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 现连接断开，会自动重新连接。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
-  import asyncdispatch, asyncnet, base64, json, nativesockets, posix, redis, ringbuffer, sequtils, strutils, tables, times
+  import asyncdispatch, asyncnet, base64, json, logging, nativesockets, posix, redis, ringbuffer, sequtils, strutils, tables, times
   import box_servicepkg/box_packer, box_servicepkg/parameter
 
   <<hexdump>>
@@ -20,6 +20,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 
   var device_connections: Table[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]] = initTable[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]]()
   var task_buffer: RingBuffer[Task] = newRingBuffer[Task](bitsize = 10)
+  var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
+  addHandler(L)
 
   proc prepareAddress(intaddr: uint32, intport: uint16): ptr Sockaddr_in =
     result = cast[ptr Sockaddr_in](alloc0(sizeof(Sockaddr_in)))
@@ -51,8 +53,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         var dst = task.sockaddr
         await sendTo(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
-        echo "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
-        #echo hexdump(task.data, len(task.data))
+        info "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
+        flushFile(stdout)
+        #info hexdump(task.data, len(task.data))
       else:
         await sleepAsync(1000)
 #+end_src
@@ -87,27 +90,33 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         var received = ""
         for i in 0..blen - 1:
           received &= chr(rcvbuf[i])
-        echo "Received ", blen, " bytes: ", received
+        info "Received ", blen, " bytes: ", received
+        flushFile(stdout)
         let rcvd: string = base64.decode($cast[cstring](rcvbuf))
         for i in 0..len(rcvd) - 1:
           rcvbuf[i] = ord(rcvd[i])
-        # echo hexdump(@(rcvbuf[]), len(rcvd))
+        # info hexdump(@(rcvbuf[]), len(rcvd))
         var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
         if data != nil:
           case data.cmd_type:
             of CommandType.PING:
-              echo "Receive PING from ", address
+              info "Receive PING from ", address
+              flushFile(stdout)
               <<ping>>
             of CommandType.CONFIRM:
-              echo "Receive CONFIRM from ", address
+              info "Receive CONFIRM from ", address
+              flushFile(stdout)
               <<confirm>>
             of CommandType.LOCK_DATA:
-              echo "Receive LOCK_DATA from ", address
+              info "Receive LOCK_DATA from ", address
+              flushFile(stdout)
               <<lock-data>>
             else:
-              echo "Receive UNKNOWN from ", address
+              info "Receive UNKNOWN from ", address
+              flushFile(stdout)
         else:
-          echo "Receive invalid packet from ", address
+          info "Receive invalid packet from ", address
+          flushFile(stdout)
 #+end_src
 
 ** check task
@@ -139,31 +148,41 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         let taskkeys = keys_result.read()
         for taskkey in taskkeys:
           if len(taskkey) != 41:
-            echo "invalid taskkey ", taskkey
+            warn "Invalid taskkey ", taskkey
+            flushFile(stdout)
             continue
           let taskstr = await redis_client.lIndex(taskkey, -1)
           if taskstr == redisNil:
-            echo "Got nothing in task queue"
+            warn "Got nothing in task queue"
+            flushFile(stdout)
             continue
           else:
             let task = try: parseJson(taskstr)
                        except: nil
             if task == nil or task["expires-at"].getNum() < epochTime().toInt():
-              asyncCheck redis_client.lrem(taskkey, taskstr, 1)
-              echo "Remove expired task in ", taskkey, ": ", taskstr
+              let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
+              if lrem_result == 0:
+                warn "Cannot remove expired task ", taskstr, " from ", taskkey
+                flushFile(stdout)
+              else:
+                info "Remove expired task ", taskstr, " from ", taskkey
+                flushFile(stdout)
             else:
               let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
               if not device_connections.contains(uid):
-                echo "Connection for uid ", uid, " is missing"
+                warn "Connection for uid ", uid, " is missing"
+                flushFile(stdout)
                 continue
               let
                 expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in] = device_connections[uid]
                 (expires_at, dst) = expired_connection
               if expires_at < epochTime().toInt():
-                echo "Connection of uid ", uid, " is expired"
+                warn "Connection of uid ", uid, " is expired"
+                flushFile(stdout)
                 device_connections.del(uid)
               else:
-                echo "Found task for ", $uid
+                info "Found task for ", $uid
+                flushFile(stdout)
                 case task["command"].getStr():
                   of "lock-off":
                     <<lock-off>>
@@ -194,7 +213,10 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                   of "charger-status":
                     <<charger-status>>
                   else:
-                    asyncCheck redis_client.rpop(taskkey)
+                    let rpop_result = await redis_client.rpop(taskkey)
+                    if rpop_result == redisNil:
+                      warn "Pop ", taskkey, " failed"
+                      flushFile(stdout)
 
       await sleepAsync(1000)
 #+end_src
@@ -210,7 +232,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       sock = newAsyncNativeSocket(domain = Domain.AF_INET, sockType = SockType.SOCK_DGRAM, protocol = Protocol.IPPROTO_UDP)
 
     discard bindAddr(sock.SocketHandle, cast[ptr SockAddr](name), sizeof(Sockaddr_in).Socklen)
-    echo "server bound to port 5008"
+    info "Server bound to port 5008"
+    flushFile(stdout)
 
     asyncCheck receive_always(sock)
     asyncCheck send_always(sock)
@@ -231,7 +254,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     param = data.parameter
     sn = param.sn
   <<save-connections>>
-  #echo "PING uid", $uid
+  #info "PING uid", $uid
   <<pong>>
 #+end_src
 * PONG
@@ -243,7 +266,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   pong_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = pong_param.encode_as(CommandType.PONG, uid)
   discard task_buffer.add((sockaddr: saddr, data: pkt))
-  echo "Prepare to send PONG to ", uid, " @ ", address
+  info "Prepare to send PONG to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 * CONFIRM
 收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
@@ -277,6 +301,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 17: CommandType.CAMERA_OFF
                  of 18: CommandType.LOCK_DATA
                  else: CommandType.UNKNOWN
+  info "origin confirm type: ", cmd_type
+  flushFile(stdout)
   var taskstrs: seq[string] = @[]
   var lrange_result = redis_client.lRange(taskskey, 0, -1)
   yield lrange_result
@@ -315,7 +341,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     of CommandType.CHARGER_STATUS:
       <<charger-status-confirm>>
     else:
-      echo "Invalid command"
+      warn "Invalid command"
+      flushFile(stdout)
 #+end_src
 
 * LOCK-OFF
@@ -329,17 +356,20 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_OFF to ", uid, " @ ", address
+  info "Prepare to send LOCK_OFF to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-off-confirm
-  echo "confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
+  info "Confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
       if task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        echo "Reomve from redis ", taskstr
+        info "Reomve from redis ", taskstr
+        flushFile(stdout)
         break
     except:
       discard
@@ -355,11 +385,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCKS_OFF to ", uid, " @ ", address
+  info "Prepare to send LOCKS_OFF to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref locks-off-confirm
-  echo "confirm cmd type is LOCKS_OFF, board: ", param.board, ", locks: ", param.locks.mapIt($it).join(",")
+  info "Confirm cmd type is LOCKS_OFF, board: ", param.board, ", locks: ", param.locks.mapIt($it).join(",")
+  flushFile(stdout)
   let locks = param.locks.foldl(a * b, 1)
   for taskstr in taskstrs:
     try:
@@ -368,7 +400,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         let lockstmp = task["locks"].getElems().foldl(a * b.getNum(), 1'i64)
         if locks == lockstmp:
           asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-          echo "Reomve from redis ", taskstr
+          info "Reomve from redis ", taskstr
+          flushFile(stdout)
           break
     except:
       discard
@@ -383,11 +416,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_STATUS to ", uid, " @ ", address
+  info "Prepare to send LOCK_STATUS to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
-  echo "confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+  info "Confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -423,11 +458,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_DETECT to ", uid, " @ ", address
+  info "Prepare to send LOCK_DETECT to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-detect-confirm
-  echo "confirm cmd type is LOCK_DETECT, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+  info "Confirm cmd type is LOCK_DETECT, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -463,14 +500,16 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LOCK_STATUS_DETECT to ", uid, " @ ", address
+  info "Prepare to send LOCK_STATUS_DETECT to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 
 响应里包括两个部分的数据，states 里存放的是锁的状态，locks 里存放的是测物条的状态
 
 #+begin_src nim :noweb-ref lock-status-detect-confirm
-  echo "confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
+  info "Confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
+  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -528,7 +567,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     expires_at = if now > timestamp: 5 else: timestamp - now
   <<save-connections>>
 
-  echo "LOCK-DATA, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
+  info "LOCK-DATA, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
+  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -573,7 +613,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   confirm_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = confirm_param.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((sockaddr: saddr, data: pkt))
-  echo "Prepare to send CONFIRM of LOCK_DATA to ", uid, " @ ", address
+  info "Prepare to send CONFIRM of LOCK_DATA to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 
 * LIGHT-ON
@@ -585,11 +626,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LIGHT_ON to ", uid, " @ ", address
+  info "Prepare to send LIGHT_ON to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-on-confirm
-  echo "confirm cmd type is LIGHT_ON"
+  info "Confirm cmd type is LIGHT_ON"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -608,11 +651,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send LIGHT_Off to ", uid, " @ ", address
+  info "Prepare to send LIGHT_Off to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-off-confirm
-  echo "confirm cmd type is LIGHT_OFF"
+  info "Confirm cmd type is LIGHT_OFF"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -631,11 +676,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send FAN_ON to ", uid, " @ ", address
+  info "Prepare to send FAN_ON to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-on-confirm
-  echo "confirm cmd type is FAN_ON"
+  info "Confirm cmd type is FAN_ON"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -654,11 +701,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send FAN_Off to ", uid, " @ ", address
+  info "Prepare to send FAN_Off to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-off-confirm
-  echo "confirm cmd type is FAN_OFF"
+  info "Confirm cmd type is FAN_OFF"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -677,11 +726,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send ULTRAVIOLET_ON to ", uid, " @ ", address
+  info "Prepare to send ULTRAVIOLET_ON to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-on-confirm
-  echo "confirm cmd type is ULTRAVIOLET_ON"
+  info "Confirm cmd type is ULTRAVIOLET_ON"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -700,11 +751,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send ULTRAVIOLET_OFF to ", uid, " @ ", address
+  info "Prepare to send ULTRAVIOLET_OFF to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-off-confirm
-  echo "confirm cmd type is ULTRAVIOLET_OFF"
+  info "Confirm cmd type is ULTRAVIOLET_OFF"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -724,11 +777,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send CAMERA_ON to ", uid, " @ ", address
+  info "Prepare to send CAMERA_ON to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-on-confirm
-  echo "confirm cmd type is CAMERA_ON"
+  info "Confirm cmd type is CAMERA_ON"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
@@ -747,16 +802,19 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send CAMERA_OFF to ", uid, " @ ", address
+  info "Prepare to send CAMERA_OFF to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-off-confirm
-  echo "confirm cmd type is CAMERA_OFF"
+  info "Confirm cmd type is CAMERA_OFF"
+  flushFile(stdout)
   for taskstr in taskstrs:
     try:
       let task = parseJson(taskstr)
       if task["command"].getStr() == "camera-off":
-        echo "remove task in queue: ", taskstr
+        info "remove task in queue: ", taskstr
+        flushFile(stdout)
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
         break
     except:
@@ -771,11 +829,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   discard task_buffer.add((sockaddr: dst, data: pkt))
   var dstaddr = dst
   discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
-  echo "Prepare to send CHARGER_STATUS to ", uid, " @ ", address
+  info "Prepare to send CHARGER_STATUS to ", uid, " @ ", address
+  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
-  echo "confirm cmd type is CHARGER_STATUS, charger1: ", param.chargers[0], ", charger2: ", param.chargers[1], ", charger3: ", param.chargers[2], ", charger4: ", param.chargers[3]
+  info "Confirm cmd type is CHARGER_STATUS, charger1: ", param.chargers[0], ", charger2: ", param.chargers[1], ", charger3: ", param.chargers[2], ", charger4: ", param.chargers[3]
+  flushFile(stdout)
   for i in 0..len(param.chargers) - 1:
     var
       state = param.chargers[i]
@@ -788,7 +848,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     try:
       let task = parseJson(taskstr)
       if task["command"].getStr() == "charger-status":
-        echo "remove task in queue: ", taskstr
+        info "remove task in queue: ", taskstr
+        flushFile(stdout)
         asyncCheck redis_client.lRem(taskskey, taskstr, 1)
         break
     except:
@@ -797,8 +858,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 * 数据封包
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
   import parameter, zeropack
-  import sequtils, strutils
-  import hashes
+  import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
       UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18
@@ -883,12 +943,14 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       header_size = 1 + 1 + 1 + 12
       packed_size = cast[int](buf[offset])
     if length != packed_size:
-      echo "length is invalid, got ", $length, " but need ", packed_size
+      warn "Length is invalid, got ", $length, " but need ", packed_size
+      flushFile(stdout)
       #echo hexdump(buf, length)
       return nil
     let checksum: uint8 = crc8(buf, offset + 2, length - 2)
     if checksum != buf[offset + 1]:
-      echo "checksum is invalid, got ", buf[offset + 1], " but should be ", checksum, "\n"
+      warn "Checksum is invalid, got ", buf[offset + 1], " but should be ", checksum, "\n"
+      flushFile(stdout)
       return nil
     var uid: UID
     for i in 0..11:
@@ -902,7 +964,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       of 18:
         result = PackResult(cmd_type: CommandType.LOCK_DATA, uid: uid, parameter: parameter.decode_from(unzipped, 0))
       else:
-        echo "command type is invalid\n"
+        warn "Command type is invalid\n"
+        flushFile(stdout)
         return nil
 #+end_src
 * 支援方法
