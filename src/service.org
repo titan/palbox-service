@@ -70,54 +70,44 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       rcvbuf: ref array[1024, byte] = new(array[1024, byte])
       address = newString(128)
       slen = sizeof(Sockaddr_in).SockLen
-      redis_client: AsyncRedis
-      redis_connected: bool = false
+    let redis_client: AsyncRedis = await openAsync()
     while true:
-      block mainloop:
-        if not redis_connected:
-          let redis_result = openAsync(host = "localhost")
-          yield redis_result
-          if redis_result.failed():
-            redis_connected = false
+      zeroMem(cast[pointer](rcvbuf), 1024)
+      var saddr = Sockaddr_in()
+      zeroMem(cast[pointer](addr(saddr)), sizeof(Sockaddr_in))
+      let blen = await sock.recvFromInto(cast[pointer](rcvbuf), 1024, cast[ptr SockAddr](addr(saddr)), addr(slen))
+      discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
+      address = address.strip(chars = {'\0'})
+      var received = ""
+      for i in 0..blen - 1:
+        received &= chr(rcvbuf[i])
+      info "Received ", blen, " bytes: ", received
+      flushFile(stdout)
+      let rcvd: string = base64.decode($cast[cstring](rcvbuf))
+      for i in 0..len(rcvd) - 1:
+        rcvbuf[i] = ord(rcvd[i])
+      # info hexdump(@(rcvbuf[]), len(rcvd))
+      var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
+      if data != nil:
+        case data.cmd_type:
+          of CommandType.PING:
+            info "Receive PING from ", address
+            flushFile(stdout)
+            <<ping>>
+          of CommandType.CONFIRM:
+            info "Receive CONFIRM from ", address
+            flushFile(stdout)
+            <<confirm>>
+          of CommandType.LOCK_DATA:
+            info "Receive LOCK_DATA from ", address
+            flushFile(stdout)
+            <<lock-data>>
           else:
-            redis_connected = true
-            redis_client = redis_result.read()
-        zeroMem(cast[pointer](rcvbuf), 1024)
-        var saddr = Sockaddr_in()
-        zeroMem(cast[pointer](addr(saddr)), sizeof(Sockaddr_in))
-        let blen = await sock.recvFromInto(cast[pointer](rcvbuf), 1024, cast[ptr SockAddr](addr(saddr)), addr(slen))
-        discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
-        address = address.strip(chars = {'\0'})
-        var received = ""
-        for i in 0..blen - 1:
-          received &= chr(rcvbuf[i])
-        info "Received ", blen, " bytes: ", received
+            info "Receive UNKNOWN from ", address
+            flushFile(stdout)
+      else:
+        info "Receive invalid packet from ", address
         flushFile(stdout)
-        let rcvd: string = base64.decode($cast[cstring](rcvbuf))
-        for i in 0..len(rcvd) - 1:
-          rcvbuf[i] = ord(rcvd[i])
-        # info hexdump(@(rcvbuf[]), len(rcvd))
-        var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
-        if data != nil:
-          case data.cmd_type:
-            of CommandType.PING:
-              info "Receive PING from ", address
-              flushFile(stdout)
-              <<ping>>
-            of CommandType.CONFIRM:
-              info "Receive CONFIRM from ", address
-              flushFile(stdout)
-              <<confirm>>
-            of CommandType.LOCK_DATA:
-              info "Receive LOCK_DATA from ", address
-              flushFile(stdout)
-              <<lock-data>>
-            else:
-              info "Receive UNKNOWN from ", address
-              flushFile(stdout)
-        else:
-          info "Receive invalid packet from ", address
-          flushFile(stdout)
 #+end_src
 
 ** check task
@@ -127,103 +117,87 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc check_always() {.async.} =
-    var
-      redis_client: AsyncRedis
-      redis_connected: bool = false
-      address = newString(128)
+    var address = newString(128)
+    let  redis_client: AsyncRedis = await openAsync()
     while true:
-      if not redis_connected:
-        let redis_result = openAsync(host = "localhost")
-        yield redis_result
-        if redis_result.failed():
-          redis_connected = false
+      let taskkeys = await redis_client.keys("tasks.*")
+      for taskkey in taskkeys:
+        if len(taskkey) != 41:
+          warn "Invalid taskkey ", taskkey
+          flushFile(stdout)
+          continue
+        let taskstr = await redis_client.lIndex(taskkey, 0)
+        if taskstr == redisNil:
+          warn "Got nothing in task queue"
+          flushFile(stdout)
+          continue
         else:
-          redis_connected = true
-          redis_client = redis_result.read()
-      let keys_result = redis_client.keys("tasks.*")
-      yield keys_result
-      if keys_result.failed():
-        redis_connected = false
-        await sleepAsync(1000)
-      else:
-        let taskkeys = keys_result.read()
-        for taskkey in taskkeys:
-          if len(taskkey) != 41:
-            warn "Invalid taskkey ", taskkey
-            flushFile(stdout)
-            continue
-          let taskstr = await redis_client.lIndex(taskkey, 0)
-          if taskstr == redisNil:
-            warn "Got nothing in task queue"
-            flushFile(stdout)
-            continue
-          else:
-            let task = try: parseJson(taskstr) except: nil
-            if task == nil or task["expires-at"].getNum() < epochTime().toInt():
-              let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
-              if lrem_result == 0:
-                warn "Cannot remove expired task ", taskstr, " from ", taskkey
-                flushFile(stdout)
-              else:
-                let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
-                task["status"] = % "expired"
-                task["occurred-at"] = %(getDateStr() & " " & getClockStr())
-                discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
-                info "Remove expired task ", taskstr, " from ", taskkey
-                flushFile(stdout)
+          let task = try: parseJson(taskstr) except: nil
+          if task == nil or task["expires-at"].getNum() < epochTime().toInt():
+            let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
+            if lrem_result == 0:
+              warn "Cannot remove expired task ", taskstr, " from ", taskkey
+              flushFile(stdout)
             else:
               let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
-              if not device_connections.contains(uid):
-                warn "Connection for uid ", uid, " is missing"
-                flushFile(stdout)
-                continue
-              let
-                expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in] = device_connections[uid]
-                (expires_at, dst) = expired_connection
-              if expires_at < epochTime().toInt():
-                warn "Connection of uid ", uid, " is expired"
-                flushFile(stdout)
-                device_connections.del(uid)
-              else:
-                info "Found task for ", $uid
-                flushFile(stdout)
-                task["status"] = % "sending"
-                task["occurred-at"] = %(getDateStr() & " " & getClockStr())
-                discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
-                case task["command"].getStr():
-                  of "lock-off":
-                    <<lock-off>>
-                  of "locks-off":
-                    <<locks-off>>
-                  of "lock-status":
-                    <<lock-status>>
-                  of "lock-detect":
-                    <<lock-detect>>
-                  of "lock-status-detect":
-                    <<lock-status-detect>>
-                  of "light-on":
-                    <<light-on>>
-                  of "light-off":
-                    <<light-off>>
-                  of "fan-on":
-                    <<fan-on>>
-                  of "fan-off":
-                    <<fan-off>>
-                  of "ultraviolet-on":
-                    <<ultraviolet-on>>
-                  of "ultraviolet-off":
-                    <<ultraviolet-off>>
-                  of "camera-on":
-                    <<camera-on>>
-                  of "camera-off":
-                    <<camera-off>>
-                  of "charger-status":
-                    <<charger-status>>
-                  else:
-                    let rpop_result = await redis_client.rpop(taskkey)
-                    if rpop_result == redisNil:
-                      warn "Pop ", taskkey, " failed"
-                      flushFile(stdout)
+              task["status"] = % "expired"
+              task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+              discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
+              info "Remove expired task ", taskstr, " from ", taskkey
+              flushFile(stdout)
+          else:
+            let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
+            if not device_connections.contains(uid):
+              warn "Connection for uid ", uid, " is missing"
+              flushFile(stdout)
+              continue
+            let
+              expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in] = device_connections[uid]
+              (expires_at, dst) = expired_connection
+            if expires_at < epochTime().toInt():
+              warn "Connection of uid ", uid, " is expired"
+              flushFile(stdout)
+              device_connections.del(uid)
+            else:
+              info "Found task for ", $uid
+              flushFile(stdout)
+              task["status"] = % "sending"
+              task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+              discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
+              case task["command"].getStr():
+                of "lock-off":
+                  <<lock-off>>
+                of "locks-off":
+                  <<locks-off>>
+                of "lock-status":
+                  <<lock-status>>
+                of "lock-detect":
+                  <<lock-detect>>
+                of "lock-status-detect":
+                  <<lock-status-detect>>
+                of "light-on":
+                  <<light-on>>
+                of "light-off":
+                  <<light-off>>
+                of "fan-on":
+                  <<fan-on>>
+                of "fan-off":
+                  <<fan-off>>
+                of "ultraviolet-on":
+                  <<ultraviolet-on>>
+                of "ultraviolet-off":
+                  <<ultraviolet-off>>
+                of "camera-on":
+                  <<camera-on>>
+                of "camera-off":
+                  <<camera-off>>
+                of "charger-status":
+                  <<charger-status>>
+                else:
+                  let rpop_result = await redis_client.rpop(taskkey)
+                  if rpop_result == redisNil:
+                    warn "Pop ", taskkey, " failed"
+                    flushFile(stdout)
 
       await sleepAsync(1000)
 #+end_src
@@ -308,15 +282,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
                  of 17: CommandType.CAMERA_OFF
                  of 18: CommandType.LOCK_DATA
                  else: CommandType.UNKNOWN
-  flushFile(stdout)
-  var taskstrs: seq[string] = @[]
-  var lrange_result = redis_client.lRange(taskskey, 0, -1)
-  yield lrange_result
-  if not lrange_result.failed:
-    taskstrs = lrange_result.read()
-  else:
-    redis_connected = false
-    break mainloop
+  var taskstrs: seq[string] = await redis_client.lrange(taskskey, 0, -1)
   case cmd_type:
     of CommandType.LOCK_OFF:
       <<lock-off-confirm>>
@@ -431,17 +397,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     for j in 0..7:
       var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = redis_client.setEx(skey, 5, "1")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, 5, "1")
       else:
-        var setex_result = redis_client.setEx(skey, 5, "0")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "lock-status" and cast[int8](task["board"].getNum()) == param.board:
@@ -469,17 +427,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     for j in 0..7:
       var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = redis_client.setEx(skey, 5, "1")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, 5, "1")
       else:
-        var setex_result = redis_client.setEx(skey, 5, "0")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getNum()) == param.board:
@@ -510,33 +460,17 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     for j in 0..7:
       var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = redis_client.setEx(skey, 5, "1")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, 5, "1")
       else:
-        let setex_result = redis_client.setEx(skey, 5, "0")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, 5, "0")
   for i in 0..len(param.locks) - 1:
     var state = param.locks[i]
     for j in 0..7:
       var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.locks) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = redis_client.setEx(skey, 5, "1")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, 5, "1")
       else:
-        var setex_result = redis_client.setEx(skey, 5, "0")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board:
@@ -562,33 +496,17 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     for j in 0..7:
       var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = redis_client.setEx(skey, expires_at, "1")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, expires_at, "1")
       else:
-        let setex_result = redis_client.setEx(skey, expires_at, "0")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, expires_at, "0")
   for i in 0..len(param.locks) - 1:
     var state = param.locks[i]
     for j in 0..7:
       var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.locks) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        var setex_result = redis_client.setEx(skey, expires_at, "1")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, expires_at, "1")
       else:
-        var setex_result = redis_client.setEx(skey, expires_at, "0")
-        yield setex_result
-        if setex_result.failed():
-          redis_connected = false
-          break mainloop
+        discard await redis_client.setEx(skey, expires_at, "0")
   <<lock-data-confirm>>
 #+end_src
 ** 下行响应
@@ -794,10 +712,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     var
       state = param.chargers[i]
       skey = "charger-status." & $uid & "." & $(i + 1)
-      setex_result = redis_client.setEx(skey, 30, $state)
-    yield setex_result
-    if setex_result.failed():
-      redis_connected = false
+    discard await redis_client.setEx(skey, 30, $state)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "charger-status":
@@ -925,11 +840,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+begin_src nim :noweb-ref save-connections
   device_connections[uid] = (expires_at: epochTime().toInt() + 60 * 1024, sockaddr: saddr)
   let activated_key = "box.activated." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
-  var sadd_result = redis_client.sAdd(activated_key, $uid)
-  yield sadd_result
-  if sadd_result.failed:
-    redis_connected = false
-    break mainloop
+  discard await redis_client.sAdd(activated_key, $uid)
 #+end_src
 
 ** hexdump
