@@ -29,7 +29,6 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     result.sin_port = nativesockets.htons(intport)
     result.sin_addr.s_addr = nativesockets.htonl(intaddr)
 
-
 #+end_src
 
 ** send
@@ -153,20 +152,23 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
             warn "Invalid taskkey ", taskkey
             flushFile(stdout)
             continue
-          let taskstr = await redis_client.lIndex(taskkey, -1)
+          let taskstr = await redis_client.lIndex(taskkey, 0)
           if taskstr == redisNil:
             warn "Got nothing in task queue"
             flushFile(stdout)
             continue
           else:
-            let task = try: parseJson(taskstr)
-                       except: nil
+            let task = try: parseJson(taskstr) except: nil
             if task == nil or task["expires-at"].getNum() < epochTime().toInt():
               let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
               if lrem_result == 0:
                 warn "Cannot remove expired task ", taskstr, " from ", taskkey
                 flushFile(stdout)
               else:
+                let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
+                task["status"] = % "expired"
+                task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+                discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
                 info "Remove expired task ", taskstr, " from ", taskkey
                 flushFile(stdout)
             else:
@@ -185,6 +187,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
               else:
                 info "Found task for ", $uid
                 flushFile(stdout)
+                task["status"] = % "sending"
+                task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+                discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
                 case task["command"].getStr():
                   of "lock-off":
                     <<lock-off>>
@@ -346,6 +351,15 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       flushFile(stdout)
 #+end_src
 
+在确认的同时，需要确认消息记录到日志中。
+
+#+begin_src nim :noweb-ref update-status-to-sent
+  task["status"] = %"sent"
+  task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+  discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
+#+end_src
+
+
 * LOCK-OFF
 ** 下行命令
 #+begin_src nim :noweb-ref lock-off
@@ -365,15 +379,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        info "Reomve from redis ", taskstr
-        flushFile(stdout)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
+      <<remove-task>>
 #+end_src
 * LOCKS-OFF
 ** 下行命令
@@ -395,17 +403,11 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   flushFile(stdout)
   let locks = param.locks.foldl(a * b, 1)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "locks-off" and cast[int8](task["board"].getNum()) == param.board:
-        let lockstmp = task["locks"].getElems().foldl(a * b.getNum(), 1'i64)
-        if locks == lockstmp:
-          asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-          info "Reomve from redis ", taskstr
-          flushFile(stdout)
-          break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "locks-off" and cast[int8](task["board"].getNum()) == param.board:
+      let lockstmp = task["locks"].getElems().foldl(a * b.getNum(), 1'i64)
+      if locks == lockstmp:
+        <<remove-task>>
 #+end_src
 * LOCK-STATUS
 ** 下行命令
@@ -422,7 +424,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
-  info "Confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
+  info "Confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0].toHex(), ", state1: ", param.states[1].toHex(), ", state2: ", param.states[2].toHex()
   flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
@@ -441,13 +443,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
           redis_connected = false
           break mainloop
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "lock-status" and cast[int8](task["board"].getNum()) == param.board:
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "lock-status" and cast[int8](task["board"].getNum()) == param.board:
+      <<remove-task>>
 #+end_src
 * LOCK-DETECT
 ** 下行命令
@@ -483,13 +481,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
           redis_connected = false
           break mainloop
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getNum()) == param.board:
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getNum()) == param.board:
+      <<remove-task>>
 #+end_src
 * LOCK-STATUS-DETECT
 ** 下行命令
@@ -544,16 +538,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
           redis_connected = false
           break mainloop
   for taskstr in taskstrs:
-    let task = try: parseJson(taskstr)
-               except: nil
-    if task == nil:
-      continue
-    elif task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board:
-      let rem_result = redis_client.lRem(taskskey, taskstr, 1)
-      yield rem_result
-      if rem_result.failed():
-        redis_connected = false
-        break mainloop
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board:
+      <<remove-task>>
 #+end_src
 * LOCK-DATA
 设备定时把锁控板的状态和测物条的状态上报给服务端，服务端把这些状态同步到缓存中。
@@ -635,13 +622,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is LIGHT_ON"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "light-on":
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "light-on":
+      <<remove-task>>
 #+end_src
 * LIGHT-OFF
 ** 下行命令
@@ -660,13 +643,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is LIGHT_OFF"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "light-off":
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "light-off":
+      <<remove-task>>
 #+end_src
 * FAN-ON
 ** 下行命令
@@ -685,13 +664,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is FAN_ON"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "fan-on":
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "fan-on":
+      <<remove-task>>
 #+end_src
 * FAN-OFF
 ** 下行命令
@@ -710,13 +685,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is FAN_OFF"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "fan-off":
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "fan-off":
+      <<remove-task>>
 #+end_src
 * ULTRAVIOLET-ON
 ** 下行命令
@@ -735,13 +706,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is ULTRAVIOLET_ON"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "ultraviolet-on":
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "ultraviolet-on":
+      <<remove-task>>
 #+end_src
 * ULTRAVIOLET-OFF
 ** 下行命令
@@ -760,13 +727,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is ULTRAVIOLET_OFF"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "ultraviolet-off":
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "ultraviolet-off":
+      <<remove-task>>
 #+end_src
 
 * CAMERA-ON
@@ -786,13 +749,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is CAMERA_ON"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "camera-on":
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "camera-on":
+      <<remove-task>>
 #+end_src
 * CAMERA-OFF
 ** 下行命令
@@ -811,15 +770,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   info "Confirm cmd type is CAMERA_OFF"
   flushFile(stdout)
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "camera-off":
-        info "remove task in queue: ", taskstr
-        flushFile(stdout)
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "camera-off":
+      <<remove-task>>
 #+end_src
 
 * CHARGER-STATUS
@@ -846,15 +799,9 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
     if setex_result.failed():
       redis_connected = false
   for taskstr in taskstrs:
-    try:
-      let task = parseJson(taskstr)
-      if task["command"].getStr() == "charger-status":
-        info "remove task in queue: ", taskstr
-        flushFile(stdout)
-        asyncCheck redis_client.lRem(taskskey, taskstr, 1)
-        break
-    except:
-      discard
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "charger-status":
+      <<remove-task>>
 #+end_src
 * 数据封包
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
@@ -1001,4 +948,13 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
 #+begin_src nim :noweb-ref ntop
   discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
   address = address.strip(chars = {'\0'})
+#+end_src
+
+** 从缓存中删除已完成任务
+
+#+begin_src nim :noweb-ref remove-task
+  discard await redis_client.lRem(taskskey, taskstr, 1)
+  <<update-status-to-sent>>
+  info "Reomve from redis ", taskstr
+  flushFile(stdout)
 #+end_src
