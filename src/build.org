@@ -20,6 +20,7 @@
   requires "nim >= 0.17.0"
   requires "redis >= 0.2.0"
   requires "ringbuffer >= 0.1.0"
+  requires "strfmt >= 0.8.5"
 #+end_src
 
 * 发行脚本
