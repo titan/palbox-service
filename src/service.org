@@ -53,6 +53,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         var dst = task.sockaddr
         await sendTo(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
+        address = address.strip(chars = {'\0'})
         info "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
         flushFile(stdout)
         #info hexdump(task.data, len(task.data))
@@ -87,6 +88,7 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
         zeroMem(cast[pointer](addr(saddr)), sizeof(Sockaddr_in))
         let blen = await sock.recvFromInto(cast[pointer](rcvbuf), 1024, cast[ptr SockAddr](addr(saddr)), addr(slen))
         discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
+        address = address.strip(chars = {'\0'})
         var received = ""
         for i in 0..blen - 1:
           received &= chr(rcvbuf[i])
@@ -353,8 +355,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   lock_off.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_off.encode_as(CommandType.LOCK_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send LOCK_OFF to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -382,8 +384,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   locks_off.pins = task["pins"].getElems().mapIt(cast[int16](it.getNum()))
   var pkt = locks_off.encode_as(CommandType.LOCKS_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send LOCKS_OFF to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -413,8 +415,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send LOCK_STATUS to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -455,8 +457,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_DETECT, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send LOCK_DETECT to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -497,8 +499,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS_DETECT, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send LOCK_STATUS_DETECT to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -623,8 +625,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   light_on.pin = cast[int16](task["pin"].getNum())
   var pkt = light_on.encode_as(CommandType.LIGHT_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send LIGHT_ON to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -648,8 +650,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   light_off.pin = cast[int16](task["pin"].getNum())
   var pkt = light_off.encode_as(CommandType.LIGHT_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send LIGHT_Off to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -673,8 +675,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   fan_on.pin = cast[int16](task["pin"].getNum())
   var pkt = fan_on.encode_as(CommandType.FAN_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send FAN_ON to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -698,8 +700,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   fan_off.pin = cast[int16](task["pin"].getNum())
   var pkt = fan_off.encode_as(CommandType.FAN_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send FAN_Off to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -723,8 +725,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   ultraviolet_on.pin = cast[int16](task["pin"].getNum())
   var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send ULTRAVIOLET_ON to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -748,8 +750,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   ultraviolet_off.pin = cast[int16](task["pin"].getNum())
   var pkt = ultraviolet_off.encode_as(CommandType.ULTRAVIOLET_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send ULTRAVIOLET_OFF to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -774,8 +776,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   camera_on.pin = cast[int16](task["pin"].getNum())
   var pkt = camera_on.encode_as(CommandType.CAMERA_ON, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send CAMERA_ON to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -799,8 +801,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   camera_off.pin = cast[int16](task["pin"].getNum())
   var pkt = camera_off.encode_as(CommandType.CAMERA_OFF, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send CAMERA_OFF to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -826,8 +828,8 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
   var camera_off: ref Parameter = new(Parameter)
   var pkt = camera_off.encode_as(CommandType.CHARGER_STATUS, uid)
   discard task_buffer.add((sockaddr: dst, data: pkt))
-  var dstaddr = dst
-  discard inet_ntop(posix.AF_INET, cast[pointer](addr dstaddr.sin_addr), cstring(address), len(address).int32)
+  var saddr = dst
+  <<ntop>>
   info "Prepare to send CHARGER_STATUS to ", uid, " @ ", address
   flushFile(stdout)
 #+end_src
@@ -993,4 +995,10 @@ redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对�
       if i mod 8 == 7:
         output.add("\n")
     return output
+#+end_src
+** 转换IP地址为字符串
+
+#+begin_src nim :noweb-ref ntop
+  discard inet_ntop(posix.AF_INET, cast[pointer](addr saddr.sin_addr), cstring(address), len(address).int32)
+  address = address.strip(chars = {'\0'})
 #+end_src
