@@ -49,7 +49,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
         address = address.strip(chars = {'\0'})
         info "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
-        flushFile(stdout)
         #info hexdump(task.data, len(task.data))
       else:
         await sleepAsync(1000)
@@ -77,7 +76,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
       for i in 0..blen - 1:
         received &= chr(rcvbuf[i])
       info "Received ", blen, " bytes: ", received
-      flushFile(stdout)
       let rcvd: string = base64.decode($cast[cstring](rcvbuf))
       for i in 0..len(rcvd) - 1:
         rcvbuf[i] = ord(rcvd[i])
@@ -87,22 +85,17 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
         case data.cmd_type:
           of CommandType.PING:
             info "Receive PING from ", address
-            flushFile(stdout)
             <<ping>>
           of CommandType.CONFIRM:
             info "Receive CONFIRM from ", address
-            flushFile(stdout)
             <<confirm>>
           of CommandType.LOCK_DATA:
             info "Receive LOCK_DATA from ", address
-            flushFile(stdout)
             <<lock-data>>
           else:
             info "Receive UNKNOWN from ", address
-            flushFile(stdout)
       else:
         info "Receive invalid packet from ", address
-        flushFile(stdout)
 #+end_src
 
 ** check task
@@ -119,12 +112,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
       for taskkey in taskkeys:
         if len(taskkey) != 41:
           warn "Invalid taskkey ", taskkey
-          flushFile(stdout)
           continue
         let taskstr = await redis_client.lIndex(taskkey, 0)
         if taskstr == redisNil:
           warn "Got nothing in task queue"
-          flushFile(stdout)
           continue
         else:
           let task = try: parseJson(taskstr) except: nil
@@ -132,30 +123,25 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
             let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
             if lrem_result == 0:
               warn "Cannot remove expired task ", taskstr, " from ", taskkey
-              flushFile(stdout)
             else:
               let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
               task["status"] = % "expired"
               task["occurred-at"] = %(getDateStr() & " " & getClockStr())
               discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
               info "Remove expired task ", taskstr, " from ", taskkey
-              flushFile(stdout)
           else:
             let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
             if not device_connections.contains(uid):
               warn "Connection for uid ", uid, " is missing"
-              flushFile(stdout)
               continue
             let
               expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in] = device_connections[uid]
               (expires_at, dst) = expired_connection
             if expires_at < epochTime().toInt():
               warn "Connection of uid ", uid, " is expired"
-              flushFile(stdout)
               device_connections.del(uid)
             else:
               info "Found task for ", $uid
-              flushFile(stdout)
               task["status"] = % "sending"
               task["occurred-at"] = %(getDateStr() & " " & getClockStr())
               discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
@@ -192,7 +178,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
                   let rpop_result = await redis_client.rpop(taskkey)
                   if rpop_result == redisNil:
                     warn "Pop ", taskkey, " failed"
-                    flushFile(stdout)
 
       await sleepAsync(1000)
 #+end_src
@@ -209,7 +194,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 
     discard bindAddr(sock.SocketHandle, cast[ptr SockAddr](name), sizeof(Sockaddr_in).Socklen)
     info "Server bound to port 5008"
-    flushFile(stdout)
 
     asyncCheck receive_always(sock)
     asyncCheck send_always(sock)
@@ -243,7 +227,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var pkt = pong_param.encode_as(CommandType.PONG, uid)
   discard task_buffer.add((sockaddr: saddr, data: pkt))
   info "Prepare to send PONG to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 * CONFIRM
 收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
@@ -309,7 +292,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
       <<charger-status-confirm>>
     else:
       warn "Invalid command ", param.cmd_type
-      flushFile(stdout)
 #+end_src
 
 在确认的同时，需要确认消息记录到日志中。
@@ -333,12 +315,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send LOCK_OFF to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-off-confirm
   info "Confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
@@ -356,12 +336,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send LOCKS_OFF to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref locks-off-confirm
   info "Confirm cmd type is LOCKS_OFF, board: ", param.board, ", locks: ", param.locks.mapIt($it).join(",")
-  flushFile(stdout)
   let locks = param.locks.foldl(a * b, 1)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
@@ -381,12 +359,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send LOCK_STATUS to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
   info "Confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0].toHex(), ", state1: ", param.states[1].toHex(), ", state2: ", param.states[2].toHex()
-  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -411,12 +387,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send LOCK_DETECT to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-detect-confirm
   info "Confirm cmd type is LOCK_DETECT, board: ", param.board, ", state0: ", param.states[0], ", state1: ", param.states[1], ", state2: ", param.states[2]
-  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -441,7 +415,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send LOCK_STATUS_DETECT to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 
@@ -449,7 +422,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 
 #+begin_src nim :noweb-ref lock-status-detect-confirm
   info "Confirm cmd type is LOCK_STATUS_DETECT, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
-  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -485,7 +457,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   <<save-connections>>
 
   info "LOCK-DATA, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
-  flushFile(stdout)
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -515,7 +486,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var pkt = confirm_param.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((sockaddr: saddr, data: pkt))
   info "Prepare to send CONFIRM of LOCK_DATA to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 
 * LIGHT-ON
@@ -528,12 +498,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send LIGHT_ON to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-on-confirm
   info "Confirm cmd type is LIGHT_ON"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "light-on":
@@ -549,12 +517,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send LIGHT_Off to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-off-confirm
   info "Confirm cmd type is LIGHT_OFF"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "light-off":
@@ -570,12 +536,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send FAN_ON to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-on-confirm
   info "Confirm cmd type is FAN_ON"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "fan-on":
@@ -591,12 +555,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send FAN_Off to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-off-confirm
   info "Confirm cmd type is FAN_OFF"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "fan-off":
@@ -612,12 +574,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send ULTRAVIOLET_ON to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-on-confirm
   info "Confirm cmd type is ULTRAVIOLET_ON"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "ultraviolet-on":
@@ -633,12 +593,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send ULTRAVIOLET_OFF to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-off-confirm
   info "Confirm cmd type is ULTRAVIOLET_OFF"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "ultraviolet-off":
@@ -655,12 +613,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send CAMERA_ON to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-on-confirm
   info "Confirm cmd type is CAMERA_ON"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "camera-on":
@@ -676,12 +632,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send CAMERA_OFF to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-off-confirm
   info "Confirm cmd type is CAMERA_OFF"
-  flushFile(stdout)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "camera-off":
@@ -697,12 +651,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var saddr = dst
   <<ntop>>
   info "Prepare to send CHARGER_STATUS to ", uid, " @ ", address
-  flushFile(stdout)
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
   info "Confirm cmd type is CHARGER_STATUS, charger1: ", param.chargers[0], ", charger2: ", param.chargers[1], ", charger3: ", param.chargers[2], ", charger4: ", param.chargers[3]
-  flushFile(stdout)
   for i in 0..len(param.chargers) - 1:
     var
       state = param.chargers[i]
@@ -802,13 +754,11 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
       packed_size = cast[int](buf[offset])
     if length != packed_size:
       warn "Length is invalid, got ", $length, " but need ", packed_size
-      flushFile(stdout)
       #echo hexdump(buf, length)
       return nil
     let checksum: uint8 = crc8(buf, offset + 2, length - 2)
     if checksum != buf[offset + 1]:
       warn "Checksum is invalid, got ", buf[offset + 1], " but should be ", checksum, "\n"
-      flushFile(stdout)
       return nil
     var uid: UID
     for i in 0..11:
@@ -823,7 +773,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
         result = PackResult(cmd_type: CommandType.LOCK_DATA, uid: uid, parameter: parameter.decode_from(unzipped, 0))
       else:
         warn "Command type is invalid\n"
-        flushFile(stdout)
         return nil
 #+end_src
 * 支援方法
@@ -862,5 +811,4 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   discard await redis_client.lRem(taskskey, taskstr, 1)
   <<update-status-to-sent>>
   info "Reomve from redis ", taskstr
-  flushFile(stdout)
 #+end_src
