@@ -764,16 +764,12 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
     for i in 0..11:
       uid[i] = buf[offset + 1 + 1 + 1 + i]
     let unzipped: seq[byte] = unzeropack(buf, offset + header_size, length - header_size)
-    case (buf[offset + 1 + 1]):
-      of 1:
-        result = PackResult(cmd_type: CommandType.PING, uid: uid, parameter: parameter.decode_from(unzipped, 0))
-      of 3:
-        result = PackResult(cmd_type: CommandType.CONFIRM, uid: uid, parameter: parameter.decode_from(unzipped, 0))
-      of 18:
-        result = PackResult(cmd_type: CommandType.LOCK_DATA, uid: uid, parameter: parameter.decode_from(unzipped, 0))
-      else:
-        warn "Command type is invalid\n"
-        return nil
+    let cmdtype = buf[offset + 1 + 1]
+    if cmdtype < 19:
+      result = PackResult(cmd_type: CommandType(cmdtype), uid: uid, parameter: parameter.decode_from(unzipped, 0))
+    else:
+      warn "Command type is invalid\n"
+      return nil
 #+end_src
 * 支援方法
 ** 保存连接
