@@ -148,7 +148,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
               device_connections.del(uid)
             else:
               if sending_time.contains(uid):
-                if now - sending_time[uid] < 3: # Don't resend in 3 seconds
+                if now - sending_time[uid] < 2: # Don't resend in 2 seconds
                   continue
               sending_time[uid] = now
               sent_count += 1
@@ -156,7 +156,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
               let
                 tasklog_key = "tasklog." & $uid & "." & getDateStr()
                 tasklog_len = cast[int](await redis_client.llen(tasklog_key))
-                tasklogs = if tasklog_len > 20: await redis_client.lrange(tasklog_key, tasklog_len - 20, tasklog_len - 1) else: await redis_client.lrange(tasklog_key, 0, -1)
+                tasklogs = if tasklog_len > 100: await redis_client.lrange(tasklog_key, tasklog_len - 100, tasklog_len - 1) else: await redis_client.lrange(tasklog_key, 0, -1)
               var found_log = false
               for logstr in tasklogs:
                 let log = try: parseJson(logstr) except: nil
