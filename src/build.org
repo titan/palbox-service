@@ -23,6 +23,13 @@
   requires "strfmt >= 0.8.5"
 #+end_src
 
+
+优化程序
+
+#+begin_src nimscript :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim.cfg
+-d:release
+#+end_src
+
 * 发行脚本
 #+begin_src text :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/Dockerfile
   FROM hive/nim-base:3.6

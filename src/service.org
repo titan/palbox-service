@@ -49,7 +49,6 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
         address = address.strip(chars = {'\0'})
         info "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
-        #info hexdump(task.data, len(task.data))
       else:
         await sleepAsync(1000)
 #+end_src
@@ -87,7 +86,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
             info "Receive PING from ", address
             <<ping>>
           of CommandType.CONFIRM:
-            info "Receive CONFIRM from ", address
+            info "Receive CONFIRM of ", data.parameter.cmd_type , " from ", address
             <<confirm>>
           of CommandType.LOCK_DATA:
             info "Receive LOCK_DATA from ", address
@@ -107,8 +106,14 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   proc check_always() {.async.} =
     var address = newString(128)
     let  redis_client: AsyncRedis = await openAsync()
+    var sending_time: Table[box_packer.UID, int64] = initTable[box_packer.UID, int64]()
+    var sent_count = 0
     while true:
       let taskkeys = await redis_client.keys("tasks.*")
+      if len(taskkeys) == 0:
+        await sleepAsync(1000)
+        continue
+      sent_count = 0
       for taskkey in taskkeys:
         if len(taskkey) != 41:
           warn "Invalid taskkey ", taskkey
@@ -137,10 +142,16 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
             let
               expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in] = device_connections[uid]
               (expires_at, dst) = expired_connection
-            if expires_at < epochTime().toInt():
+              now = epochTime().toInt()
+            if expires_at < now:
               warn "Connection of uid ", uid, " is expired"
               device_connections.del(uid)
             else:
+              if sending_time.contains(uid):
+                if now - sending_time[uid] < 3: # Don't resend in 3 seconds
+                  continue
+              sending_time[uid] = now
+              sent_count += 1
               info "Found task for ", $uid
               let
                 tasklog_key = "tasklog." & $uid & "." & getDateStr()
@@ -200,8 +211,9 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
                   let rpop_result = await redis_client.rpop(taskkey)
                   if rpop_result == redisNil:
                     warn "Pop ", taskkey, " failed"
+      if sent_count == 0:
+        await sleepAsync(1000)
 
-      await sleepAsync(1000)
 #+end_src
 
 ** serve
