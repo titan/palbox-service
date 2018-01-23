@@ -142,9 +142,31 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
               device_connections.del(uid)
             else:
               info "Found task for ", $uid
-              task["status"] = % "sending"
-              task["occurred-at"] = %(getDateStr() & " " & getClockStr())
-              discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
+              let
+                tasklog_key = "tasklog." & $uid & "." & getDateStr()
+                tasklog_len = cast[int](await redis_client.llen(tasklog_key))
+                tasklogs = if tasklog_len > 20: await redis_client.lrange(tasklog_key, tasklog_len - 20, tasklog_len - 1) else: await redis_client.lrange(tasklog_key, 0, -1)
+              var found_log = false
+              for logstr in tasklogs:
+                let log = try: parseJson(logstr) except: nil
+                if log != nil and task["command"].getStr() == log["command"].getStr() and task["expires-at"].getNum() == log["expires-at"].getNum():
+                  if log.has_key("pin") and task.has_key("pin") and log["pin"].getNum() == task["pin"].getNum():
+                    if log["status"].getStr() == "sending":
+                      found_log = true
+                      break
+                  elif log.has_key("pins") and task.has_key("pins") and len(log["pins"]) == len(task["pins"]):
+                    var found_pins = true
+                    for i in 0..len(log["pins"]) - 1:
+                      if log["pins"][i].getNum() != task["pins"][i].getNum():
+                        found_pins = false
+                        break
+                    if found_pins and log["status"].getStr() == "sending":
+                      found_log = true
+                      break
+              if not found_log:
+                task["status"] = % "sending"
+                task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+                discard await redis_client.rpush(tasklog_key, $task)
               case task["command"].getStr():
                 of "lock-off":
                   <<lock-off>>
