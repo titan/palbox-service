@@ -4,11 +4,6 @@ Box service 是设备连接到系统的通道。设备通过 box service 上报�
 box service 给设备发送命令。服务采用异步方式编写，启动后侦听 UDP/5008 端口，处理
 收到的请求，并把响应返回给请求的设备；或者把任务数据下发给设备。
 
-Box service 依赖 redis 来对设备下发命令。redis 用 AsyncRedis 来访问， AsyncRedis
-是 async 的，要求能做到断开后还能重新连接。为了能做到这一点，代码中采用
-redis_connected 这个 bool 型变量。一旦发现连接断开，就设置对应的变量，后续程序发
-现连接断开，会自动重新连接。
-
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   import asyncdispatch, asyncnet, base64, json, logging, nativesockets, posix, redis, ringbuffer, sequtils, strfmt, strutils, tables, times
   import box_servicepkg/box_packer, box_servicepkg/parameter
