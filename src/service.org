@@ -11,7 +11,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   <<hexdump>>
 
   type
-    Task = tuple[sockaddr: Sockaddr_in, data: seq[byte]]
+    Task = tuple[uid: box_packer.UID, sockaddr: Sockaddr_in, data: seq[byte]]
 
   var device_connections: Table[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]] = initTable[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]]()
   var task_buffer: RingBuffer[Task] = newRingBuffer[Task](bitsize = 10)
@@ -45,10 +45,15 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
         for i in 0..(len(encoded) - 1):
           sndbuf[i] = ord(encoded[i])
         var dst = task.sockaddr
-        await sendTo(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
+        let sendto_future = send_to(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
+        yield sendto_future
+        if sendto_future.failed:
+          device_connections.del(task.uid)
+          error "Send ", len(encoded), " byte(s) to ", task.uid, " @ ", address, ":", dst.sin_port, " failed"
+          continue
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
         address = address.strip(chars = {'\0'})
-        info "Send ", len(encoded), " byte(s) to ", address, ": ", encoded
+        info "Send ", len(encoded), " byte(s) to ", task.uid, " @ ", address, ":", dst.sin_port, ": ", encoded
       else:
         await sleepAsync(1000)
 #+end_src
@@ -83,18 +88,18 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
       if data != nil:
         case data.cmd_type:
           of CommandType.PING:
-            info "Receive PING from ", address
+            info "Receive PING from ", address, ":", saddr.sin_port
             <<ping>>
           of CommandType.CONFIRM:
-            info "Receive CONFIRM of ", data.parameter.cmd_type , " from ", address
+            info "Receive CONFIRM of ", CommandType(data.parameter.cmd_type) , " from ", address, ":", saddr.sin_port
             <<confirm>>
           of CommandType.LOCK_DATA:
-            info "Receive LOCK_DATA from ", address
+            info "Receive LOCK_DATA from ", address, ":", saddr.sin_port
             <<lock-data>>
           else:
-            info "Receive UNKNOWN from ", address
+            info "Receive UNKNOWN from ", address, ":", saddr.sin_port
       else:
-        info "Receive invalid packet from ", address
+        info "Receive invalid packet from ", address, ":", saddr.sin_port
 #+end_src
 
 ** check task
@@ -105,115 +110,105 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc check_always() {.async.} =
     var address = newString(128)
-    let  redis_client: AsyncRedis = await openAsync()
+    let redis_client: AsyncRedis = await openAsync()
     var sending_time: Table[box_packer.UID, int64] = initTable[box_packer.UID, int64]()
-    var sent_count = 0
+    var operation_count = 0
     while true:
-      let taskkeys = await redis_client.keys("tasks.*")
-      if len(taskkeys) == 0:
-        await sleepAsync(1000)
-        continue
-      sent_count = 0
-      for taskkey in taskkeys:
-        if len(taskkey) != 41:
-          warn "Invalid taskkey ", taskkey
+      operation_count = 0 # did we do redis or send something?
+      let now = epochTime().toInt()
+      for uid, pair in device_connections.pairs():
+        let
+          expires_at = pair[0]
+          dst = pair[1]
+        if expires_at < now:
+          warn "Connection of uid ", uid, " is expired"
+          device_connections.del(uid)
           continue
-        let taskstr = await redis_client.lIndex(taskkey, 0)
+        let
+          taskkey = "tasks." & $uid
+          taskstr = await redis_client.lindex(taskkey, 0)
         if taskstr == redisNil:
-          warn "Got nothing in task queue"
+          #warn "Got nothing in task queue ", taskkey
           continue
         else:
           let task = try: parseJson(taskstr) except: nil
-          if task == nil or task["expires-at"].getNum() < epochTime().toInt():
+          if task == nil or task["expires-at"].getNum() < now:
             let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
             if lrem_result == 0:
               warn "Cannot remove expired task ", taskstr, " from ", taskkey
             else:
-              let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
               task["status"] = % "expired"
               task["occurred-at"] = %(getDateStr() & " " & getClockStr())
               discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
               info "Remove expired task ", taskstr, " from ", taskkey
+              operation_count += 1
           else:
-            let uid = box_packer.parseUID(taskkey[6..len(taskkey) - 1])
-            if not device_connections.contains(uid):
-              warn "Connection for uid ", uid, " is missing"
-              continue
+            if sending_time.contains(uid):
+              if now - sending_time[uid] < 2: # Don't resend in 2 seconds
+                continue
+            sending_time[uid] = now
+            operation_count += 1
+            info "Found task for ", $uid
             let
-              expired_connection: tuple[expires_at: int, sockaddr: Sockaddr_in] = device_connections[uid]
-              (expires_at, dst) = expired_connection
-              now = epochTime().toInt()
-            if expires_at < now:
-              warn "Connection of uid ", uid, " is expired"
-              device_connections.del(uid)
-            else:
-              if sending_time.contains(uid):
-                if now - sending_time[uid] < 2: # Don't resend in 2 seconds
-                  continue
-              sending_time[uid] = now
-              sent_count += 1
-              info "Found task for ", $uid
-              let
-                tasklog_key = "tasklog." & $uid & "." & getDateStr()
-                tasklog_len = cast[int](await redis_client.llen(tasklog_key))
-                tasklogs = if tasklog_len > 100: await redis_client.lrange(tasklog_key, tasklog_len - 100, tasklog_len - 1) else: await redis_client.lrange(tasklog_key, 0, -1)
-              var found_log = false
-              for logstr in tasklogs:
-                let log = try: parseJson(logstr) except: nil
-                if log != nil and task["command"].getStr() == log["command"].getStr() and task["expires-at"].getNum() == log["expires-at"].getNum():
-                  if log.has_key("pin") and task.has_key("pin") and log["pin"].getNum() == task["pin"].getNum():
-                    if log["status"].getStr() == "sending":
-                      found_log = true
+              tasklog_key = "tasklog." & $uid & "." & getDateStr()
+              tasklog_len = cast[int](await redis_client.llen(tasklog_key))
+              tasklogs = if tasklog_len > 100: await redis_client.lrange(tasklog_key, tasklog_len - 100, tasklog_len - 1) else: await redis_client.lrange(tasklog_key, 0, -1)
+            var found_log = false
+            for logstr in tasklogs:
+              let log = try: parseJson(logstr) except: nil
+              if log != nil and task["command"].getStr() == log["command"].getStr() and task["expires-at"].getNum() == log["expires-at"].getNum():
+                if log.has_key("pin") and task.has_key("pin") and log["pin"].getNum() == task["pin"].getNum():
+                  if log["status"].getStr() == "sending":
+                    found_log = true
+                    break
+                elif log.has_key("pins") and task.has_key("pins") and len(log["pins"]) == len(task["pins"]):
+                  var found_pins = true
+                  for i in 0..len(log["pins"]) - 1:
+                    if log["pins"][i].getNum() != task["pins"][i].getNum():
+                      found_pins = false
                       break
-                  elif log.has_key("pins") and task.has_key("pins") and len(log["pins"]) == len(task["pins"]):
-                    var found_pins = true
-                    for i in 0..len(log["pins"]) - 1:
-                      if log["pins"][i].getNum() != task["pins"][i].getNum():
-                        found_pins = false
-                        break
-                    if found_pins and log["status"].getStr() == "sending":
-                      found_log = true
-                      break
-              if not found_log:
-                task["status"] = % "sending"
-                task["occurred-at"] = %(getDateStr() & " " & getClockStr())
-                discard await redis_client.rpush(tasklog_key, $task)
-              case task["command"].getStr():
-                of "lock-off":
-                  <<lock-off>>
-                of "locks-off":
-                  <<locks-off>>
-                of "lock-status":
-                  <<lock-status>>
-                of "lock-detect":
-                  <<lock-detect>>
-                of "lock-status-detect":
-                  <<lock-status-detect>>
-                of "light-on":
-                  <<light-on>>
-                of "light-off":
-                  <<light-off>>
-                of "fan-on":
-                  <<fan-on>>
-                of "fan-off":
-                  <<fan-off>>
-                of "ultraviolet-on":
-                  <<ultraviolet-on>>
-                of "ultraviolet-off":
-                  <<ultraviolet-off>>
-                of "camera-on":
-                  <<camera-on>>
-                of "camera-off":
-                  <<camera-off>>
-                of "charger-status":
-                  <<charger-status>>
-                else:
-                  let rpop_result = await redis_client.rpop(taskkey)
-                  if rpop_result == redisNil:
-                    warn "Pop ", taskkey, " failed"
-      if sent_count == 0:
+                  if found_pins and log["status"].getStr() == "sending":
+                    found_log = true
+                    break
+            if not found_log:
+              task["status"] = % "sending"
+              task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+              discard await redis_client.rpush(tasklog_key, $task)
+            case task["command"].getStr():
+              of "lock-off":
+                <<lock-off>>
+              of "locks-off":
+                <<locks-off>>
+              of "lock-status":
+                <<lock-status>>
+              of "lock-detect":
+                <<lock-detect>>
+              of "lock-status-detect":
+                <<lock-status-detect>>
+              of "light-on":
+                <<light-on>>
+              of "light-off":
+                <<light-off>>
+              of "fan-on":
+                <<fan-on>>
+              of "fan-off":
+                <<fan-off>>
+              of "ultraviolet-on":
+                <<ultraviolet-on>>
+              of "ultraviolet-off":
+                <<ultraviolet-off>>
+              of "camera-on":
+                <<camera-on>>
+              of "camera-off":
+                <<camera-off>>
+              of "charger-status":
+                <<charger-status>>
+              else:
+                let rpop_result = await redis_client.rpop(taskkey)
+                if rpop_result == redisNil:
+                  warn "Pop ", taskkey, " failed"
+      if operation_count == 0:
         await sleepAsync(1000)
-
 #+end_src
 
 ** serve
@@ -259,8 +254,8 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   pong_param.zone = 8 * 60 * 60 * 1000
   pong_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = pong_param.encode_as(CommandType.PONG, uid)
-  discard task_buffer.add((sockaddr: saddr, data: pkt))
-  info "Prepare to send PONG to ", uid, " @ ", address
+  discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
+  info "Prepare to send PONG to ", uid, " @ ", address, ":", saddr.sin_port
 #+end_src
 * CONFIRM
 收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
@@ -272,7 +267,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
     sn = param.sn
   <<save-connections>>
   let
-    taskskey = "tasks." & $uid
+    taskkey = "tasks." & $uid
     cmd_type = case param.cmd_type:
                  of 0: CommandType.UNKNOWN
                  of 1: CommandType.PING
@@ -294,7 +289,9 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
                  of 17: CommandType.CAMERA_OFF
                  of 18: CommandType.LOCK_DATA
                  else: CommandType.UNKNOWN
-  var taskstrs: seq[string] = await redis_client.lrange(taskskey, 0, -1)
+  let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
+  if len(taskstrs) == 0:
+    info "Nothing in task queue ", taskkey
   case cmd_type:
     of CommandType.LOCK_OFF:
       <<lock-off-confirm>>
@@ -345,10 +342,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   lock_off.lock = cast[int8](task["lock"].getNum())
   lock_off.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_off.encode_as(CommandType.LOCK_OFF, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_OFF to ", uid, " @ ", address
+  info "Prepare to send LOCK_OFF(board: ", lock_off.board, ", lock: ", lock_off.lock , ", pin: ", lock_off.pin , ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-off-confirm
@@ -366,10 +363,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   locks_off.locks = task["locks"].getElems().mapIt(cast[int8](it.getNum()))
   locks_off.pins = task["pins"].getElems().mapIt(cast[int16](it.getNum()))
   var pkt = locks_off.encode_as(CommandType.LOCKS_OFF, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCKS_OFF to ", uid, " @ ", address
+  info "Prepare to send LOCKS_OFF(board: ", locks_off.board, ", locks: ", locks_off.locks, ", pins: ", locks_off.pins, ") to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref locks-off-confirm
@@ -389,10 +386,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   lock_status.board = cast[int8](task["board"].getNum())
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_STATUS to ", uid, " @ ", address
+  info "Prepare to send LOCK_STATUS(board: ", lock_status.board, ", pin: ", lock_status.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
@@ -413,14 +410,14 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 * LOCK-DETECT
 ** 下行命令
 #+begin_src nim :noweb-ref lock-detect
-  var lock_status: ref Parameter = new(Parameter)
-  lock_status.board = cast[int8](task["board"].getNum())
-  lock_status.pin = cast[int16](task["pin"].getNum())
-  var pkt = lock_status.encode_as(CommandType.LOCK_DETECT, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var lock_detect: ref Parameter = new(Parameter)
+  lock_detect.board = cast[int8](task["board"].getNum())
+  lock_detect.pin = cast[int16](task["pin"].getNum())
+  var pkt = lock_detect.encode_as(CommandType.LOCK_DETECT, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_DETECT to ", uid, " @ ", address
+  info "Prepare to send LOCK_DETECT(board: ", lock_detect.board, ", pin: ", lock_detect.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-detect-confirm
@@ -445,10 +442,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   lock_status.board = cast[int8](task["board"].getNum())
   lock_status.pin = cast[int16](task["pin"].getNum())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS_DETECT, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_STATUS_DETECT to ", uid, " @ ", address
+  info "Prepare to send LOCK_STATUS_DETECT(board: ", lock_status.board, ", pin: ", lock_status.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 
@@ -518,8 +515,8 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   confirm_param.zone = 8 * 60 * 60 * 1000
   confirm_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = confirm_param.encode_as(CommandType.CONFIRM, uid)
-  discard task_buffer.add((sockaddr: saddr, data: pkt))
-  info "Prepare to send CONFIRM of LOCK_DATA to ", uid, " @ ", address
+  discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
+  info "Prepare to send CONFIRM of LOCK_DATA to ", uid, " @ ", address, ":", saddr.sin_port
 #+end_src
 
 * LIGHT-ON
@@ -528,10 +525,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var light_on: ref Parameter = new(Parameter)
   light_on.pin = cast[int16](task["pin"].getNum())
   var pkt = light_on.encode_as(CommandType.LIGHT_ON, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LIGHT_ON to ", uid, " @ ", address
+  info "Prepare to send LIGHT_ON(pin: ", light_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-on-confirm
@@ -547,10 +544,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var light_off: ref Parameter = new(Parameter)
   light_off.pin = cast[int16](task["pin"].getNum())
   var pkt = light_off.encode_as(CommandType.LIGHT_OFF, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LIGHT_Off to ", uid, " @ ", address
+  info "Prepare to send LIGHT_Off(pin: ", light_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-off-confirm
@@ -566,10 +563,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var fan_on: ref Parameter = new(Parameter)
   fan_on.pin = cast[int16](task["pin"].getNum())
   var pkt = fan_on.encode_as(CommandType.FAN_ON, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send FAN_ON to ", uid, " @ ", address
+  info "Prepare to send FAN_ON(pin: ", fan_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-on-confirm
@@ -585,10 +582,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var fan_off: ref Parameter = new(Parameter)
   fan_off.pin = cast[int16](task["pin"].getNum())
   var pkt = fan_off.encode_as(CommandType.FAN_OFF, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send FAN_Off to ", uid, " @ ", address
+  info "Prepare to send FAN_OFF(pin: ", fan_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-off-confirm
@@ -604,10 +601,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var ultraviolet_on: ref Parameter = new(Parameter)
   ultraviolet_on.pin = cast[int16](task["pin"].getNum())
   var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send ULTRAVIOLET_ON to ", uid, " @ ", address
+  info "Prepare to send ULTRAVIOLET_ON(pin: ", ultraviolet_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-on-confirm
@@ -623,10 +620,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var ultraviolet_off: ref Parameter = new(Parameter)
   ultraviolet_off.pin = cast[int16](task["pin"].getNum())
   var pkt = ultraviolet_off.encode_as(CommandType.ULTRAVIOLET_OFF, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send ULTRAVIOLET_OFF to ", uid, " @ ", address
+  info "Prepare to send ULTRAVIOLET_OFF(pin: ", ultraviolet_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-off-confirm
@@ -643,10 +640,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var camera_on: ref Parameter = new(Parameter)
   camera_on.pin = cast[int16](task["pin"].getNum())
   var pkt = camera_on.encode_as(CommandType.CAMERA_ON, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CAMERA_ON to ", uid, " @ ", address
+  info "Prepare to send CAMERA_ON(pin: ", camera_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-on-confirm
@@ -662,10 +659,10 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   var camera_off: ref Parameter = new(Parameter)
   camera_off.pin = cast[int16](task["pin"].getNum())
   var pkt = camera_off.encode_as(CommandType.CAMERA_OFF, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CAMERA_OFF to ", uid, " @ ", address
+  info "Prepare to send CAMERA_OFF(pin: ", camera_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-off-confirm
@@ -679,12 +676,12 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 * CHARGER-STATUS
 ** 下行命令
 #+begin_src nim :noweb-ref charger-status
-  var camera_off: ref Parameter = new(Parameter)
-  var pkt = camera_off.encode_as(CommandType.CHARGER_STATUS, uid)
-  discard task_buffer.add((sockaddr: dst, data: pkt))
+  var charger_status: ref Parameter = new(Parameter)
+  var pkt = charger_status.encode_as(CommandType.CHARGER_STATUS, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CHARGER_STATUS to ", uid, " @ ", address
+  info "Prepare to send CHARGER_STATUS(pin: ", charger_status.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
@@ -838,7 +835,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 ** 从缓存中删除已完成任务
 
 #+begin_src nim :noweb-ref remove-task
-  discard await redis_client.lRem(taskskey, taskstr, 1)
+  discard await redis_client.lrem(taskkey, taskstr, 1)
   <<update-status-to-sent>>
-  info "Reomve from redis ", taskstr
+  info "Remove from redis ", taskstr
 #+end_src
