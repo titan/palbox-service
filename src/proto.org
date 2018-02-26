@@ -1,25 +1,25 @@
 * PROTOCAL
 
-|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature |
-|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------|
-| PING               | ✓    | ✓   |      |           |       |      |        |          |          |       |      | ✓           |
-| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |
-| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             |
-| LOCK_OFF           |      |     |      |           | ✓     | ✓    |        |          |          |       |      |             |
-| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |
-| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |
-| LOCK_DETECT        |      |     |      |           | ✓     |      |        |          |          |       |      |             |
-| LOCK_STATUS_DETECT |      |     |      |           | ✓     |      |        |          |          |       |      |             |
-| LOCK_DATA          |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |
-| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |             |
-| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |             |
-| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |             |
-| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |
-| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |             |
-| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |             |
-| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |             |
-| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |             |
-| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |             |
+|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader |
+|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------|
+| PING               | ✓    | ✓   |      |           |       |      |        |          |          |       |      | ✓           |         |             |
+| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |
+| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             | [✓]     | [✓]         |
+| LOCK_OFF           |      |     |      |           | [✓]   | ✓    |        |          |          |       |      |             | [✓]     | [✓]         |
+| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |         |             |
+| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |         |             |
+| LOCK_DETECT        |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |
+| LOCK_STATUS_DETECT |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |
+| LOCK_DATA          |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |         |             |
+| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |             |         |             |
+| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |             |         |             |
 
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
@@ -39,5 +39,7 @@
     (byte* 12 locks) ;; 锁编号列表
     (short* 13 pins) ;; 开多个锁时的 PIN 列表
     (short 14 temperature) ;; 芯片温度
+    (int 15 card-no) ;; 卡编号
+    (byte 16 card-reader) ;; 读卡器编号
     )
 #+end_src
