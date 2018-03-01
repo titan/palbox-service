@@ -206,6 +206,8 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
                 <<camera-off>>
               of "charger-status":
                 <<charger-status>>
+              of "play":
+                <<play>>
               else:
                 let rpop_result = await redis_client.rpop(taskkey)
                 if rpop_result == redisNil:
@@ -293,6 +295,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
                  of 16: CommandType.CAMERA_ON
                  of 17: CommandType.CAMERA_OFF
                  of 18: CommandType.LOCK_DATA
+                 of 19: CommandType.PLAY
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   if len(taskstrs) == 0:
@@ -326,6 +329,8 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
       <<camera-off-confirm>>
     of CommandType.CHARGER_STATUS:
       <<charger-status-confirm>>
+    of CommandType.PLAY:
+      <<play-confirm>>
     else:
       warn "Invalid command ", param.cmd_type
 #+end_src
@@ -725,13 +730,34 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
     if task != nil and task["command"].getStr() == "charger-status":
       <<remove-task>>
 #+end_src
+* PLAY
+** 下行命令
+#+begin_src nim :noweb-ref play
+  var play: ref Parameter = new(Parameter)
+  play.pin = cast[int16](task["pin"].getNum())
+  play.audio = cast[int8](task["audio"].getNum())
+  play.card_reader = cast[int8](task["card-reader"].getNum())
+  var pkt = play.encode_as(CommandType.PLAY, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send PLAY(card-reader: ", play.card_reader, ", audio: ", play.audio, ") to ", uid, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref play-confirm
+  info "Confirm cmd type is play, card-reader: ", param.card_reader, ", audio: ", param.audio
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "play" and task["card-reader"].getNum() == param.card_reader and task["audio"].getNum() == param.audio:
+      <<remove-task>>
+#+end_src
 * 数据封包
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
   import parameter, zeropack
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
