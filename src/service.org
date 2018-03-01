@@ -247,6 +247,8 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
     sn = param.sn
   <<save-connections>>
   #info "PING uid", $uid
+  let rssi_key = "rssi." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
+  await redis_client.setk(rssi_key, $param.rssi)
   <<pong>>
 #+end_src
 * PONG
