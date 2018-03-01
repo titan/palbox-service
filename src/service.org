@@ -5,7 +5,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 收到的请求，并把响应返回给请求的设备；或者把任务数据下发给设备。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
-  import asyncdispatch, asyncnet, base64, json, logging, nativesockets, posix, redis, ringbuffer, sequtils, strfmt, strutils, tables, times
+  import asyncdispatch, asyncnet, base64, httpclient, json, logging, md5, nativesockets, posix, redis, ringbuffer, sequtils, strfmt, strutils, tables, times
   import box_servicepkg/box_packer, box_servicepkg/parameter
 
   <<hexdump>>
@@ -15,6 +15,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 
   var device_connections: Table[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]] = initTable[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]]()
   var task_buffer: RingBuffer[Task] = newRingBuffer[Task](bitsize = 10)
+  var pin_table: Table[box_packer.UID, RingBuffer[int16]] = initTable[box_packer.UID, RingBuffer[int16]]()
   var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
   addHandler(L)
 
@@ -25,6 +26,9 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
     result.sin_addr.s_addr = nativesockets.htonl(intaddr)
 
 #+end_src
+
+DevicePin 用于去除来自设备的重复命令。来自设备的命令都附带一个 PIN，如果该 PIN
+在 pin_buffer 中存在，则说明该命令已经收到，此次请求可以忽略。
 
 ** send
 
@@ -351,23 +355,40 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
     uid = data.uid
     param = data.parameter
     sn = param.sn
-    board = param.board
     lock = param.lock
     reader = param.card_reader
     card_no = param.card_no
+    pin = param.pin
   <<save-connections>>
   var confirm: ref Parameter = new(Parameter)
   confirm.sn = sn
   confirm.version = 0
   confirm.cmd_type = ord(CommandType.LOCK_OFF)
-  confirm.board = board
   confirm.lock = lock
   confirm.card_reader = reader
   confirm.card_no = confirm.card_no
-  var pkt = confirm.encode_as(CommandType.CONFIRM, uid)
+  let pkt = confirm.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
   info "Prepare to send CONFIRM of LOCK_OFF to ", uid, " @ ", address, ":", saddr.sin_port
+  if pin_table.contains(uid) and pin_table[uid].find(pin) != -1:
+    info "Found dup command LOCK_OFF from reader ", reader, " at ", uid
+  else:
+    if not pin_table.contains(uid):
+      pin_table[uid] = newRingBuffer[int16](bitsize = 3)
+    if pin_table[uid].add(pin) == 1:
+      let
+        bsclient = newAsyncHttpClient()
+        sign = toLower($toMD5("md=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&u=" & $card_no & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
+        response = await bsclient.request("https://book.fengchaohuzhu.com/" & (if lock == 0: "swing/back" else: "swing/orsark"), httpMethod = HttpPost, body = $ %*{ "u": $card_no, "md": $uid, "sw": $reader, "sno": $lock, "t": $epochTime().toInt(), "sign": sign})
+      if response.status == "200":
+        let body = await response.body()
+        let resp = try: parseJson(body) except: nil
+        if resp != nil:
+          case resp["code"].getNum():
+            of 1: discard
+            else: discard
 #+end_src
+
 * LOCK-OFF
 ** 下行命令
 #+begin_src nim :noweb-ref lock-off
