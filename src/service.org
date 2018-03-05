@@ -348,7 +348,9 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 #+end_src
 
 * CLIENT-LOCK-OFF
-从客户端发来的开锁指令，需要转发到业务系统去。
+从客户端发来的开锁指令，需要转发到业务系统去。服务把业务系统返回的结果编号转化为
+对应的音频播放指令，保存到对应的任务队列中。播放指令在任务队列中保存 10 秒，超过
+后自动删除。
 
 #+begin_src nim :noweb-ref client-lock-off
   let
@@ -373,20 +375,65 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   if pin_table.contains(uid) and pin_table[uid].find(pin) != -1:
     info "Found dup command LOCK_OFF from reader ", reader, " at ", uid
   else:
+    info "A new fresh LOCK_OFF(card-reader: ", reader , ", door: ", lock, ") from ", uid
     if not pin_table.contains(uid):
       pin_table[uid] = newRingBuffer[int16](bitsize = 3)
     if pin_table[uid].add(pin) == 1:
+      info "Add pin of LOCK_OFF to ringbuffer"
       let
         bsclient = newAsyncHttpClient()
-        sign = toLower($toMD5("md=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&u=" & $card_no & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
-        response = await bsclient.request("https://book.fengchaohuzhu.com/" & (if lock == 0: "swing/back" else: "swing/orsark"), httpMethod = HttpPost, body = $ %*{ "u": $card_no, "md": $uid, "sw": $reader, "sno": $lock, "t": $epochTime().toInt(), "sign": sign})
-      if response.status == "200":
+        timestamp = $epochTime().toInt()
+        params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & timestamp & "&u=" & $card_no else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & timestamp & "&u=" & $card_no
+        path = if lock == 0: "swing/back" else: "swing/orsark"
+        sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
+      bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
+      let response = await bsclient.post("https://dev.book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
+      bsclient.close()
+      info "Business system response status ", response.status
+      if response.status == "200 OK":
         let body = await response.body()
         let resp = try: parseJson(body) except: nil
         if resp != nil:
-          case resp["code"].getNum():
-            of 1: discard
-            else: discard
+          info "Business system response ", $resp
+          let
+            tkey = "tasks." & $uid
+            audio = if lock == 0:
+                      case resp["code"].getNum():
+                        of 1: 09
+                        of -318: 12
+                        of -350: 12
+                        of -208: 6
+                        of -138: 7
+                        of -83: 13
+                        of -339: 13
+                        of -340: 13
+                        of -1: 13
+                        of -79: 13
+                        else: 0
+                    else:
+                      case resp["code"].getNum():
+                        of 1: 3
+                        of -341: 4
+                        of -137: 5
+                        of -208: 6
+                        of -135: 7
+                        of -142: 8
+                        of -83: 13
+                        of -1: 13
+                        of -4: 13
+                        of -79: 13
+                        of -80: 13
+                        of -339: 13
+                        of -340: 13
+                        else: 0
+          if audio != 0:
+            let json = %*{"command": "play", "card-reader": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+
+            await redis_client.multi()
+            discard await redis_client.rpush(key = tkey, value = $json)
+            discard await redis_client.expire(key = tkey, seconds = 86400)
+            discard await redis_client.rpush(key = "tasklog." & $uid & "." & getDateStr(), value = $json)
+            discard await redis_client.exec()
 #+end_src
 
 * LOCK-OFF
@@ -769,7 +816,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is play, card-reader: ", param.card_reader, ", audio: ", param.audio
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "play" and task["card-reader"].getNum() == param.card_reader and task["audio"].getNum() == param.audio:
+    if task != nil and task["command"].getStr() == "play" and task["card-reader"].getNum() == param.card_reader and task["audio"].getNum() == param.audio and task["pin"].getNum() == param.pin:
       <<remove-task>>
 #+end_src
 * 数据封包

@@ -27,7 +27,7 @@
 优化程序
 
 #+begin_src nimscript :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim.cfg
--d:release
+-d:release -d:ssl
 #+end_src
 
 * 发行脚本
