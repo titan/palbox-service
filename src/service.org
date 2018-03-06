@@ -12,10 +12,11 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 
   type
     Task = tuple[uid: box_packer.UID, sockaddr: Sockaddr_in, data: seq[byte]]
+    PinPair = tuple[pin: int16, expire_in: int64]
 
   var device_connections: Table[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]] = initTable[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]]()
   var task_buffer: RingBuffer[Task] = newRingBuffer[Task](bitsize = 10)
-  var pin_table: Table[box_packer.UID, RingBuffer[int16]] = initTable[box_packer.UID, RingBuffer[int16]]()
+  var pin_table: Table[box_packer.UID, RingBuffer[PinPair]] = initTable[box_packer.UID, RingBuffer[PinPair]]()
   var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
   addHandler(L)
 
@@ -42,7 +43,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       address = newString(128)
       slen = sizeof(Sockaddr_in).SockLen
     while true:
-      if len(task_buffer) > 0'u32:
+      if len(task_buffer) > 0:
         let task = pop(task_buffer)
         zeroMem(cast[pointer](sndbuf), 1024)
         let encoded = base64.encode[byte](task.data, lineLen = 1024)
@@ -372,68 +373,75 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   let pkt = confirm.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
   info "Prepare to send CONFIRM of LOCK_OFF to ", uid, " @ ", address, ":", saddr.sin_port
-  if pin_table.contains(uid) and pin_table[uid].find(pin) != -1:
+  let timestamp = epochTime().toInt()
+  if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
     info "Found dup command LOCK_OFF from reader ", reader, " at ", uid
   else:
     info "A new fresh LOCK_OFF(card-reader: ", reader , ", door: ", lock, ") from ", uid
     if not pin_table.contains(uid):
-      pin_table[uid] = newRingBuffer[int16](bitsize = 3)
-    if pin_table[uid].add(pin) == 1:
-      info "Add pin of LOCK_OFF to ringbuffer"
-      let
-        bsclient = newAsyncHttpClient()
-        timestamp = $epochTime().toInt()
-        params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & timestamp & "&u=" & $card_no else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & timestamp & "&u=" & $card_no
-        path = if lock == 0: "swing/back" else: "swing/orsark"
-        sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
-      bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
-      let response = await bsclient.post("https://dev.book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
-      bsclient.close()
-      info "Business system response status ", response.status
-      if response.status == "200 OK":
-        let body = await response.body()
-        let resp = try: parseJson(body) except: nil
-        if resp != nil:
-          info "Business system response ", $resp
-          let
-            tkey = "tasks." & $uid
-            audio = if lock == 0:
-                      case resp["code"].getNum():
-                        of 1: 10
-                        of -318: 12
-                        of -350: 12
-                        of -208: 7
-                        of -138: 8
-                        of -83: 13
-                        of -339: 13
-                        of -340: 13
-                        of -1: 13
-                        of -79: 13
-                        else: 0
-                    else:
-                      case resp["code"].getNum():
-                        of 1: 4
-                        of -341: 5
-                        of -137: 6
-                        of -208: 7
-                        of -135: 8
-                        of -142: 9
-                        of -83: 13
-                        of -1: 13
-                        of -4: 13
-                        of -79: 13
-                        of -80: 13
-                        of -339: 13
-                        of -340: 13
-                        else: 0
-          if audio != 0:
-            let json = %*{"command": "play", "card-reader": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+      pin_table[uid] = newRingBuffer[PinPair](bitsize = 3)
+    else:
+      while len(pin_table[uid]) > 0 and pin_table[uid][0][1] < timestamp:
+        discard pin_table[uid].pop()
+    while pin_table[uid].add((pin: pin, expire_in: cast[int64](timestamp + 6))) == 0:
+      discard pin_table[uid].pop()
+    info "Add pin of LOCK_OFF to ringbuffer"
+    let
+      bsclient = newAsyncHttpClient()
+      params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no
+      path = if lock == 0: "swing/back" else: "swing/orsark"
+      sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
+    bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
+    info "https://dev.book.fengchaohuzhu.com/" & path
+    let response = await bsclient.post("https://dev.book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
+    info params & "&sign=" & sign
+    bsclient.close()
+    info "Business system response status ", response.status
+    if response.status == "200 OK":
+      let body = await response.body()
+      let resp = try: parseJson(body) except: nil
+      if resp != nil:
+        info "Business system response ", $resp
+        let
+          tkey = "tasks." & $uid
+          audio = if lock == 0:
+                    case resp["code"].getNum():
+                      of 1: 10
+                      of -318: 12
+                      of -350: 12
+                      of -208: 7
+                      of -138: 8
+                      of -83: 13
+                      of -339: 13
+                      of -340: 13
+                      of -1: 13
+                      of -79: 13
+                      of -80: 14
+                      else: 0
+                  else:
+                    case resp["code"].getNum():
+                      of 1: 4
+                      of -341: 5
+                      of -137: 6
+                      of -208: 7
+                      of -135: 8
+                      of -142: 9
+                      of -83: 13
+                      of -1: 13
+                      of -4: 13
+                      of -79: 13
+                      of -80: 13
+                      of -339: 13
+                      of -340: 13
+                      else: 0
+        if audio != 0:
+          let json = %*{"command": "play", "card-reader": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
 
-            await redis_client.multi()
-            discard await redis_client.rpush(key = tkey, value = $json)
-            discard await redis_client.expire(key = tkey, seconds = 86400)
-            discard await redis_client.rpush(key = "tasklog." & $uid & "." & getDateStr(), value = $json)
-            discard await redis_client.exec()
+          await redis_client.multi()
+          discard await redis_client.rpush(key = tkey, value = $json)
+          discard await redis_client.expire(key = tkey, seconds = 86400)
+          discard await redis_client.rpush(key = "tasklog." & $uid & "." & getDateStr(), value = $json)
+          discard await redis_client.exec()
 #+end_src
 
 * LOCK-OFF
