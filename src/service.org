@@ -48,7 +48,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         zeroMem(cast[pointer](sndbuf), 1024)
         let encoded = base64.encode[byte](task.data, lineLen = 1024)
         for i in 0..(len(encoded) - 1):
-          sndbuf[i] = ord(encoded[i])
+          sndbuf[i] = cast[uint8](ord(encoded[i]))
         var dst = task.sockaddr
         let sendto_future = send_to(socket = sock, data = cast[pointer](sndbuf), size = len(encoded), saddr = cast[ptr SockAddr](addr(dst)), saddrLen = slen)
         yield sendto_future
@@ -87,7 +87,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       info "Received ", blen, " bytes: ", received
       let rcvd: string = base64.decode($cast[cstring](rcvbuf))
       for i in 0..len(rcvd) - 1:
-        rcvbuf[i] = ord(rcvd[i])
+        rcvbuf[i] = cast[uint8](ord(rcvd[i]))
       # info hexdump(@(rcvbuf[]), len(rcvd))
       var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
       if data != nil:
@@ -392,8 +392,8 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       path = if lock == 0: "swing/back" else: "swing/orsark"
       sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
     bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
-    info "https://dev.book.fengchaohuzhu.com/" & path
-    let response = await bsclient.post("https://dev.book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
+    info "https://book.fengchaohuzhu.com/" & path
+    let response = await bsclient.post("https://book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
     info params & "&sign=" & sign
     bsclient.close()
     info "Business system response status ", response.status
