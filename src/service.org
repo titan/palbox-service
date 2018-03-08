@@ -360,7 +360,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     sn = param.sn
     lock = param.lock
     reader = param.card_reader
-    card_no = param.card_no
+    card_no = cast[uint32](param.card_no)
     pin = param.pin
   <<save-connections>>
   var confirm: ref Parameter = new(Parameter)
