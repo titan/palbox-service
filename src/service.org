@@ -254,8 +254,13 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     sn = param.sn
   <<save-connections>>
   #info "PING uid", $uid
-  let rssi_key = "rssi." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
+  let
+    rssi_key = "rssi." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
+    ping_key = "ping." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
+    reply_time = if param.reply_time == 0: 600 else: param.reply_time
+    ttl = if param.ttl == 0: 255 else: param.ttl
   await redis_client.setk(rssi_key, $param.rssi)
+  await redis_client.setk(ping_key, $reply_time & "," & $ttl)
   <<pong>>
 #+end_src
 * PONG
@@ -374,75 +379,75 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
   info "Prepare to send CONFIRM of LOCK_OFF to ", uid, " @ ", address, ":", saddr.sin_port
   let timestamp = epochTime().toInt()
-  if param.timestamp + 5000 < timestamp * 1000:
-    if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
-      info "Found dup command LOCK_OFF from reader ", reader, " at ", uid
+  #if param.timestamp + 5000 < timestamp * 1000:
+  if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
+    info "Found dup command LOCK_OFF from reader ", reader, " at ", uid
+  else:
+    info "A new fresh LOCK_OFF(card-reader: ", reader , ", door: ", lock, ") from ", uid
+    if not pin_table.contains(uid):
+      pin_table[uid] = newRingBuffer[PinPair](bitsize = 3)
     else:
-      info "A new fresh LOCK_OFF(card-reader: ", reader , ", door: ", lock, ") from ", uid
-      if not pin_table.contains(uid):
-        pin_table[uid] = newRingBuffer[PinPair](bitsize = 3)
-      else:
-        while len(pin_table[uid]) > 0 and pin_table[uid][0][1] < timestamp:
-          discard pin_table[uid].pop()
-      while pin_table[uid].add((pin: pin, expire_in: cast[int64](timestamp + 6))) == 0:
+      while len(pin_table[uid]) > 0 and pin_table[uid][0][1] < timestamp:
         discard pin_table[uid].pop()
-      info "Add pin of LOCK_OFF to ringbuffer"
-      let
-        bsclient = newAsyncHttpClient()
-        params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no
-        path = if lock == 0: "swing/back" else: "swing/orsark"
-        sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
-      bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
-      info "https://book.fengchaohuzhu.com/" & path
-      let response = await bsclient.post("https://book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
-      info params & "&sign=" & sign
-      bsclient.close()
-      info "Business system response status ", response.status
-      if response.status == "200 OK":
-        let body = await response.body()
-        let resp = try: parseJson(body) except: nil
-        if resp != nil:
-          info "Business system response ", $resp
-          let
-            tkey = "tasks." & $uid
-            audio = if lock == 0:
-                      case resp["code"].getNum():
-                        of 1: 10
-                        of -318: 12
-                        of -350: 12
-                        of -208: 7
-                        of -138: 8
-                        of -83: 13
-                        of -339: 13
-                        of -340: 13
-                        of -1: 13
-                        of -79: 13
-                        of -80: 14
-                        else: 0
-                    else:
-                      case resp["code"].getNum():
-                        of 1: 4
-                        of -341: 5
-                        of -137: 6
-                        of -208: 7
-                        of -135: 8
-                        of -142: 9
-                        of -83: 13
-                        of -1: 13
-                        of -4: 13
-                        of -79: 13
-                        of -80: 13
-                        of -339: 13
-                        of -340: 13
-                        else: 0
-          if audio != 0:
-            let json = %*{"command": "play", "card-reader": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+    while pin_table[uid].add((pin: pin, expire_in: cast[int64](timestamp + 6))) == 0:
+      discard pin_table[uid].pop()
+    info "Add pin of LOCK_OFF to ringbuffer"
+    let
+      bsclient = newAsyncHttpClient()
+      params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no
+      path = if lock == 0: "swing/back" else: "swing/orsark"
+      sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
+    bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
+    info "https://book.fengchaohuzhu.com/" & path
+    let response = await bsclient.post("https://book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
+    info params & "&sign=" & sign
+    bsclient.close()
+    info "Business system response status ", response.status
+    if response.status == "200 OK":
+      let body = await response.body()
+      let resp = try: parseJson(body) except: nil
+      if resp != nil:
+        info "Business system response ", $resp
+        let
+          tkey = "tasks." & $uid
+          audio = if lock == 0:
+                    case resp["code"].getNum():
+                      of 1: 10
+                      of -318: 12
+                      of -350: 12
+                      of -208: 7
+                      of -138: 8
+                      of -83: 13
+                      of -339: 13
+                      of -340: 13
+                      of -1: 13
+                      of -79: 13
+                      of -80: 14
+                      else: 0
+                  else:
+                    case resp["code"].getNum():
+                      of 1: 4
+                      of -341: 5
+                      of -137: 6
+                      of -208: 7
+                      of -135: 8
+                      of -142: 9
+                      of -83: 13
+                      of -1: 13
+                      of -4: 13
+                      of -79: 13
+                      of -80: 13
+                      of -339: 13
+                      of -340: 13
+                      else: 0
+        if audio != 0:
+          let json = %*{"command": "play", "card-reader": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
 
-            await redis_client.multi()
-            discard await redis_client.rpush(key = tkey, value = $json)
-            discard await redis_client.expire(key = tkey, seconds = 86400)
-            discard await redis_client.rpush(key = "tasklog." & $uid & "." & getDateStr(), value = $json)
-            discard await redis_client.exec()
+          await redis_client.multi()
+          discard await redis_client.rpush(key = tkey, value = $json)
+          discard await redis_client.expire(key = tkey, seconds = 86400)
+          discard await redis_client.rpush(key = "tasklog." & $uid & "." & getDateStr(), value = $json)
+          discard await redis_client.exec()
 #+end_src
 
 * LOCK-OFF
@@ -456,7 +461,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_OFF(board: ", lock_off.board, ", lock: ", lock_off.lock , ", pin: ", lock_off.pin , ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_OFF(board: ", lock_off.board, ", lock: ", lock_off.lock , ", pin: ", cast[uint16](lock_off.pin) , ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-off-confirm
@@ -477,7 +482,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCKS_OFF(board: ", locks_off.board, ", locks: ", locks_off.locks, ", pins: ", locks_off.pins, ") to ", uid, " @ ", address
+  info "Prepare to send LOCKS_OFF(board: ", locks_off.board, ", locks: ", locks_off.locks, ", pins: ", locks_off.pins.mapIt(cast[uint16](it)), ") to ", uid, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref locks-off-confirm
@@ -500,7 +505,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_STATUS(board: ", lock_status.board, ", pin: ", lock_status.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_STATUS(board: ", lock_status.board, ", pin: ", cast[uint16](lock_status.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
@@ -528,7 +533,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_DETECT(board: ", lock_detect.board, ", pin: ", lock_detect.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_DETECT(board: ", lock_detect.board, ", pin: ", cast[uint16](lock_detect.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-detect-confirm
@@ -556,7 +561,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_STATUS_DETECT(board: ", lock_status.board, ", pin: ", lock_status.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_STATUS_DETECT(board: ", lock_status.board, ", pin: ", cast[uint16](lock_status.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 
@@ -598,7 +603,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     expires_at = if now > timestamp: 5 else: timestamp - now
   <<save-connections>>
 
-  info "LOCK-DATA, board: ", param.board, ", status: ", param.states[0], ", ", param.states[1], ", ", param.states[2], ", detect: ", param.locks[0], ", ", param.locks[1], ", ", param.locks[2]
+  info "LOCK-DATA, board: ", param.board, ", status: ", cast[uint8](param.states[0]), ", ", cast[uint8](param.states[1]), ", ", cast[uint8](param.states[2])
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
     for j in 0..7:
@@ -607,14 +612,14 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         discard await redis_client.setEx(skey, expires_at, "1")
       else:
         discard await redis_client.setEx(skey, expires_at, "0")
-  for i in 0..len(param.locks) - 1:
-    var state = param.locks[i]
-    for j in 0..7:
-      var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.locks) - 1 - i) * 8 + j + 1)
-      if ((1 shl j) and state) != 0:
-        discard await redis_client.setEx(skey, expires_at, "1")
-      else:
-        discard await redis_client.setEx(skey, expires_at, "0")
+  #for i in 0..len(param.locks) - 1:
+  #  var state = param.locks[i]
+  #  for j in 0..7:
+  #    var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.locks) - 1 - i) * 8 + j + 1)
+  #    if ((1 shl j) and state) != 0:
+  #      discard await redis_client.setEx(skey, expires_at, "1")
+  #    else:
+  #      discard await redis_client.setEx(skey, expires_at, "0")
   <<lock-data-confirm>>
 #+end_src
 ** 下行响应
@@ -639,7 +644,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LIGHT_ON(pin: ", light_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LIGHT_ON(pin: ", cast[uint16](light_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-on-confirm
@@ -658,7 +663,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LIGHT_Off(pin: ", light_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LIGHT_Off(pin: ", cast[uint16](light_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-off-confirm
@@ -677,7 +682,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send FAN_ON(pin: ", fan_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send FAN_ON(pin: ", cast[uint16](fan_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-on-confirm
@@ -696,7 +701,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send FAN_OFF(pin: ", fan_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send FAN_OFF(pin: ", cast[uint16](fan_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-off-confirm
@@ -715,7 +720,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send ULTRAVIOLET_ON(pin: ", ultraviolet_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send ULTRAVIOLET_ON(pin: ", cast[uint16](ultraviolet_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-on-confirm
@@ -734,7 +739,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send ULTRAVIOLET_OFF(pin: ", ultraviolet_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send ULTRAVIOLET_OFF(pin: ", cast[uint16](ultraviolet_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-off-confirm
@@ -754,7 +759,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CAMERA_ON(pin: ", camera_on.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CAMERA_ON(pin: ", cast[uint16](camera_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-on-confirm
@@ -773,7 +778,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CAMERA_OFF(pin: ", camera_off.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CAMERA_OFF(pin: ", cast[uint16](camera_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-off-confirm
@@ -792,7 +797,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CHARGER_STATUS(pin: ", charger_status.pin, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CHARGER_STATUS(pin: ", cast[uint16](charger_status.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
@@ -818,7 +823,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send PLAY(card-reader: ", play.card_reader, ", audio: ", play.audio, ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send PLAY(card-reader: ", play.card_reader, ", audio: ", play.audio, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref play-confirm

@@ -1,26 +1,26 @@
 * PROTOCAL
 
-|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio |
-|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------|
-| PING               | ✓    | ✓   |      |           |       |      |        |          |          |       |      | ✓           |         |             |       |
-| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |       |
-| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             | [✓]     | [✓]         |       |
-| LOCK_OFF           |      |     |      |           | [✓]   | ✓    |        |          |          |       |      |             | [✓]     | [✓]         |       |
-| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |         |             |       |
-| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |         |             |       |
-| LOCK_DETECT        |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |
-| LOCK_STATUS_DETECT |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |
-| LOCK_DATA          |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |         |             |       |
-| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |
-| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |             |         |             |       |
-| PLAY               |      |     |      |           |       |      |        |          |          |       |      |             |         |             | ✓     |
+|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl |
+|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------+------------+-----|
+| PING               | ✓    | ✓   |      |           |       |      |        |          | ✓        |       |      | ✓           |         |             |       | ✓          | ✓   |
+| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             | [✓]     | [✓]         |       |            |     |
+| LOCK_OFF           |      |     |      |           | [✓]   | ✓    |        |          |          |       |      |             | [✓]     | [✓]         |       |            |     |
+| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |         |             |       |            |     |
+| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |         |             |       |            |     |
+| LOCK_DETECT        |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |
+| LOCK_STATUS_DETECT |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |
+| LOCK_DATA          |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |         |             |       |            |     |
+| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |
+| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |             |         |             |       |            |     |
+| PLAY               |      |     |      |           |       |      |        |          |          |       |      |             |         |             | ✓     |            |     |
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
   (struct parameter
@@ -42,5 +42,7 @@
     (int 15 card-no) ;; 卡编号
     (byte 16 card-reader) ;; 读卡器编号
     (byte 17 audio) ;; 音频编号
+    (short 18 reply-time) ;; PING 响应时间
+    (byte 19 ttl) ;; PING TTL
     )
 #+end_src
