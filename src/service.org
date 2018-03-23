@@ -9,6 +9,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
   import box_servicepkg/box_packer, box_servicepkg/parameter
 
   <<hexdump>>
+  <<generate-pin>>
 
   type
     Task = tuple[uid: box_packer.UID, sockaddr: Sockaddr_in, data: seq[byte]]
@@ -141,6 +142,16 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         else:
           let task = try: parseJson(taskstr) except: nil
           if task == nil or task["expires-at"].getNum() < now:
+            if task["command"].getStr() == "lock-off" or task["command"].getStr() == "locks-off":
+              # send a fan-on command to box device to check gprs network status
+              let
+                pin = generate_pin(1)
+                jobkey = "tasks." & $uid
+                logkey = "tasklog." & $uid & "." & getDateStr()
+                job = %*{"command": "fan-on", "expires-at": epochTime().toInt() + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+              discard await redis_client.lpush(key = jobkey, value = $job)
+              #discard await redis_client.expire(key = jobkey, seconds = 86400)
+              discard await redis_client.rpush(key = logkey, value = $job)
             let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
             if lrem_result == 0:
               warn "Cannot remove expired task ", taskstr, " from ", taskkey
@@ -975,4 +986,18 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard await redis_client.lrem(taskkey, taskstr, 1)
   <<update-status-to-sent>>
   info "Remove from redis ", taskstr
+#+end_src
+** 生成 PIN
+
+   PIN 为当前时间戳除 10 与 8192 取模，外加设备编号的结果，用于保证每10秒内，对同一个设备只执行一次命令。
+| no | dev         |
+|----+-------------|
+|  0 | light       |
+|  1 | fan         |
+|  2 | ultraviolet |
+|  3 | camera      |
+
+#+begin_src nim :noweb-ref generate-pin
+  proc generate_pin(dev: int): int =
+    result = cast[int](cast[int64](epochTime().toInt() shr 3) and 8191) or (dev shl 13)
 #+end_src
