@@ -452,7 +452,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                       of -340: 13
                       else: 0
         if audio != 0:
-          let json = %*{"command": "play", "card-reader": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+          let json = %*{"command": "play", "speaker": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
 
           await redis_client.multi()
           discard await redis_client.rpush(key = tkey, value = $json)
@@ -834,11 +834,11 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send PLAY(card-reader: ", play.card_reader, ", audio: ", play.audio, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send PLAY(speaker: ", play.card_reader, ", audio: ", play.audio, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref play-confirm
-  info "Confirm cmd type is play, card-reader: ", param.card_reader, ", audio: ", param.audio
+  info "Confirm cmd type is play, speaker: ", param.card_reader, ", audio: ", param.audio
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "play" and task["card-reader"].getNum() == param.card_reader and task["audio"].getNum() == param.audio and task["pin"].getNum() == param.pin:
