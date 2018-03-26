@@ -268,10 +268,14 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   let
     rssi_key = "rssi." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
     ping_key = "ping." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
+    reset_key = "reset." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
     reply_time = if param.reply_time == 0: 600 else: param.reply_time
     ttl = if param.ttl == 0: 255 else: param.ttl
+    gprs_reset = param.gprs_reset
+    gprs_shutdown = param.gprs_shutdown
   await redis_client.setk(rssi_key, $param.rssi)
   await redis_client.setk(ping_key, $reply_time & "," & $ttl)
+  await redis_client.setk(ping_key, $gprs_shutdown & "," & $gprs_reset)
   <<pong>>
 #+end_src
 * PONG
@@ -286,7 +290,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Prepare to send PONG to ", uid, " @ ", address, ":", saddr.sin_port
 #+end_src
 * CONFIRM
-收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
+  收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
 队列中删除。
 #+begin_src nim :noweb-ref confirm
   let
