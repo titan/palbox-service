@@ -41,7 +41,7 @@
     (short 14 temperature) ;; 芯片温度
     (int 15 card-no) ;; 卡编号
     (byte 16 card-reader) ;; 读卡器编号
-    (byte 17 audio) ;; 音频编号
+    (short 17 audio) ;; 音频编号
     (short 18 reply-time) ;; PING 响应时间
     (byte 19 ttl) ;; PING TTL
     (int 20 gprs-reset) ;; GPRS RESET 次数
