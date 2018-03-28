@@ -483,7 +483,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
       <<remove-task>>
 #+end_src
 * LOCKS-OFF
@@ -563,7 +563,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         discard redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getNum()) == param.board and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getNum()) == param.board:
       <<remove-task>>
 #+end_src
 * LOCK-STATUS-DETECT
@@ -602,7 +602,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         discard await redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board:
       <<remove-task>>
 #+end_src
 * LOCK-DATA
@@ -666,7 +666,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is LIGHT_ON"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "light-on" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "light-on":
       <<remove-task>>
 #+end_src
 * LIGHT-OFF
@@ -685,7 +685,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is LIGHT_OFF"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "light-off" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "light-off":
       <<remove-task>>
 #+end_src
 * FAN-ON
@@ -704,7 +704,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is FAN_ON"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "fan-on" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "fan-on":
       <<remove-task>>
 #+end_src
 * FAN-OFF
@@ -723,7 +723,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is FAN_OFF"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "fan-off" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "fan-off":
       <<remove-task>>
 #+end_src
 * ULTRAVIOLET-ON
@@ -742,7 +742,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is ULTRAVIOLET_ON"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "ultraviolet-on" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "ultraviolet-on":
       <<remove-task>>
 #+end_src
 * ULTRAVIOLET-OFF
@@ -761,7 +761,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is ULTRAVIOLET_OFF"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "ultraviolet-off" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "ultraviolet-off":
       <<remove-task>>
 #+end_src
 
@@ -781,7 +781,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is CAMERA_ON"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "camera-on" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "camera-on":
       <<remove-task>>
 #+end_src
 * CAMERA-OFF
@@ -800,7 +800,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is CAMERA_OFF"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "camera-off" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "camera-off":
       <<remove-task>>
 #+end_src
 
@@ -824,7 +824,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     discard await redis_client.setEx(skey, 30, $state)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "charger-status" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "charger-status":
       <<remove-task>>
 #+end_src
 * PLAY
