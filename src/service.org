@@ -275,7 +275,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     gprs_shutdown = param.gprs_shutdown
   await redis_client.setk(rssi_key, $param.rssi)
   await redis_client.setk(ping_key, $reply_time & "," & $ttl)
-  await redis_client.setk(ping_key, $gprs_shutdown & "," & $gprs_reset)
+  await redis_client.setk(reset_key, $gprs_shutdown & "," & $gprs_reset)
   <<pong>>
 #+end_src
 * PONG
