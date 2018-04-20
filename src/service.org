@@ -10,6 +10,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 
   <<hexdump>>
   <<generate-pin>>
+  <<check-base64>>
 
   type
     Task = tuple[uid: box_packer.UID, sockaddr: Sockaddr_in, data: seq[byte]]
@@ -86,6 +87,9 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       for i in 0..blen - 1:
         received &= chr(rcvbuf[i])
       info "Received ", blen, " bytes: ", received
+      if check_base64(rcvbuf, blen):
+        info "Receive invalid base64 packet from ", address, ":", saddr.sin_port
+        continue
       let rcvd: string = base64.decode($cast[cstring](rcvbuf))
       for i in 0..len(rcvd) - 1:
         rcvbuf[i] = cast[uint8](ord(rcvd[i]))
@@ -1004,4 +1008,19 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 #+begin_src nim :noweb-ref generate-pin
   proc generate_pin(dev: int): int =
     result = cast[int](cast[int64](epochTime().toInt() shr 3) and 8191) or (dev shl 13)
+#+end_src
+** 检查 base64 编码
+服务从设备上收到的数据是用 base64 编码处理过的。如果收到的数据包不是
+base64 编码，则后续的处理会导致服务崩溃。因此必须判断接收到数据包是否
+是 base64 编码。检查的方法很简单，对收到的数据包中的每个字节，检查是否
+在 "A-Z", "a-z", "0-9", "+/=" 范围内。
+
+#+begin_src nim :noweb-ref check-base64
+  proc check_base64(buf: ref array[1024, byte], len: int): bool =
+    result = true
+    for i in 0..len:
+      let b = buf[i]
+      if not ((0x2E'u8 < b and b < 0x3A'u8) or (0x40'u8 < b and b < 0x5b'u8) or (0x60'u8 < b and b < 0x7b'u8) or (b == 0x2B)):
+        result = false
+        break
 #+end_src
