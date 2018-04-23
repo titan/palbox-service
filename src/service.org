@@ -228,6 +228,10 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                 <<charger-status>>
               of "play":
                 <<play>>
+              of "volume-up":
+                <<volume-up>>
+              of "volume-down":
+                <<volume-down>>
               else:
                 let rpop_result = await redis_client.rpop(taskkey)
                 if rpop_result == redisNil:
@@ -325,6 +329,9 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                  of 17: CommandType.CAMERA_OFF
                  of 18: CommandType.LOCK_DATA
                  of 19: CommandType.PLAY
+                 of 20: CommandType.VOLUME_UP
+                 of 21: CommandType.VOLUME_DOWN
+                 of 22: CommandType.CONFIG_GPRS
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   if len(taskstrs) == 0:
@@ -360,6 +367,10 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       <<charger-status-confirm>>
     of CommandType.PLAY:
       <<play-confirm>>
+    of CommandType.VOLUME_UP:
+      <<volume-up-confirm>>
+    of CommandType.VOLUME_DOWN:
+      <<volume-down-confirm>>
     else:
       warn "Invalid command ", param.cmd_type
 #+end_src
@@ -852,13 +863,53 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     if task != nil and task["command"].getStr() == "play" and task["speaker"].getNum() == param.card_reader and task["audio"].getNum() == param.audio and cast[int16](task["pin"].getNum()) == param.pin:
       <<remove-task>>
 #+end_src
+* VOLUME_UP
+** 下行命令
+#+begin_src nim :noweb-ref volume-up
+  var play: ref Parameter = new(Parameter)
+  play.pin = cast[int16](task["pin"].getNum())
+  play.card_reader = cast[int8](task["speaker"].getNum())
+  var pkt = play.encode_as(CommandType.VOLUME_UP, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send VOLUME_UP(speaker: ", play.card_reader, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref volume-up-confirm
+  info "Confirm cmd type is volume-up, speaker: ", param.card_reader
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "volume-up" and task["speaker"].getNum() == param.card_reader and cast[int16](task["pin"].getNum()) == param.pin:
+      <<remove-task>>
+#+end_src
+* VOLUME_DOWN
+** 下行命令
+#+begin_src nim :noweb-ref volume-down
+  var play: ref Parameter = new(Parameter)
+  play.pin = cast[int16](task["pin"].getNum())
+  play.card_reader = cast[int8](task["speaker"].getNum())
+  var pkt = play.encode_as(CommandType.VOLUME_DOWN, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send VOLUME_DOWN(speaker: ", play.card_reader, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref volume-down-confirm
+  info "Confirm cmd type is volume-down, speaker: ", param.card_reader
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "volume-down" and task["speaker"].getNum() == param.card_reader and cast[int16](task["pin"].getNum()) == param.pin:
+      <<remove-task>>
+#+end_src
 * 数据封包
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
   import parameter, zeropack
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_GPRS = 22
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
@@ -952,7 +1003,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       uid[i] = buf[offset + 1 + 1 + 1 + i]
     let unzipped: seq[byte] = unzeropack(buf, offset + header_size, length - header_size)
     let cmdtype = buf[offset + 1 + 1]
-    if cmdtype < 19:
+    if cmdtype < 23:
       result = PackResult(cmd_type: CommandType(cmdtype), uid: uid, parameter: parameter.decode_from(unzipped, 0))
     else:
       warn "Command type is invalid\n"

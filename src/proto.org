@@ -1,26 +1,29 @@
 * PROTOCAL
 
-|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl | gprs-reset | gprs-shutdown |
-|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------+------------+-----+------------+---------------|
-| PING               | ✓    | ✓   |      |           |       |      |        |          | ✓        |       |      | ✓           |         |             |       | ✓          | ✓   | ✓          | ✓             |
-| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             | [✓]     | [✓]         |       |            |     |            |               |
-| LOCK_OFF           |      |     |      |           | [✓]   | ✓    |        |          |          |       |      |             | [✓]     | [✓]         |       |            |     |            |               |
-| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |         |             |       |            |     |            |               |
-| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| LOCK_DETECT        |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| LOCK_STATUS_DETECT |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| LOCK_DATA          |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |         |             |       |            |     |            |               |
-| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |
-| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |             |         |             |       |            |     |            |               |
-| PLAY               |      |     |      |           |       |      |        |          |          |       |      |             |         |             | ✓     |            |     |            |               |
+|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl | gprs-reset | gprs-shutdown | gprs-heart-rate | gprs-timeout |
+|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------+------------+-----+------------+---------------+-----------------+--------------|
+| PING               | ✓    | ✓   |      |           |       |      |        |          | ✓        |       |      | ✓           |         |             |       | ✓          | ✓   | ✓          | ✓             |                 |              |
+| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             | [✓]     | [✓]         |       |            |     |            |               |                 |              |
+| LOCK_OFF           |      |     |      |           | [✓]   | ✓    |        |          |          |       |      |             | [✓]     | [✓]         |       |            |     |            |               |                 |              |
+| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |         |             |       |            |     |            |               |                 |              |
+| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| LOCK_DETECT        |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| LOCK_STATUS_DETECT |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| LOCK_DATA          |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |         |             |       |            |     |            |               |                 |              |
+| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |             |         |             |       |            |     |            |               |                 |              |
+| PLAY               |      |     |      |           |       |      |        |          |          |       |      |             |         |             | ✓     |            |     |            |               |                 |              |
+| VOLUME_UP          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| VOLUME_DOWN        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               |                 |              |
+| CONFIG_GPRS        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |            |               | ✓               | ✓            |
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
   (struct parameter
@@ -46,5 +49,7 @@
     (byte 19 ttl) ;; PING TTL
     (int 20 gprs-reset) ;; GPRS RESET 次数
     (int 21 gprs-shutdown) ;; GPRS SHUTDOWN 次数
+    (int 22 gprs-heart-rate) ;; GPRS 心跳频率，必须为 pow(2, n) - 1, 3 < n < 9
+    (int 23 gprs-timeout) ;; GPRS 超时时间，单位为 100ms
     )
 #+end_src
