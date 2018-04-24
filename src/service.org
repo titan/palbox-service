@@ -232,6 +232,8 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                 <<volume-up>>
               of "volume-down":
                 <<volume-down>>
+              of "config-gprs":
+                <<config-gprs>>
               else:
                 let rpop_result = await redis_client.rpop(taskkey)
                 if rpop_result == redisNil:
@@ -371,6 +373,8 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       <<volume-up-confirm>>
     of CommandType.VOLUME_DOWN:
       <<volume-down-confirm>>
+    of CommandType.CONFIG_GPRS:
+      <<config-gprs-confirm>>
     else:
       warn "Invalid command ", param.cmd_type
 #+end_src
@@ -866,14 +870,14 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 * VOLUME_UP
 ** 下行命令
 #+begin_src nim :noweb-ref volume-up
-  var play: ref Parameter = new(Parameter)
-  play.pin = cast[int16](task["pin"].getNum())
-  play.card_reader = cast[int8](task["speaker"].getNum())
-  var pkt = play.encode_as(CommandType.VOLUME_UP, uid)
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getNum())
+  param.card_reader = cast[int8](task["speaker"].getNum())
+  var pkt = param.encode_as(CommandType.VOLUME_UP, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send VOLUME_UP(speaker: ", play.card_reader, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send VOLUME_UP(speaker: ", param.card_reader, ", pin: ", cast[uint16](param.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref volume-up-confirm
@@ -886,14 +890,14 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 * VOLUME_DOWN
 ** 下行命令
 #+begin_src nim :noweb-ref volume-down
-  var play: ref Parameter = new(Parameter)
-  play.pin = cast[int16](task["pin"].getNum())
-  play.card_reader = cast[int8](task["speaker"].getNum())
-  var pkt = play.encode_as(CommandType.VOLUME_DOWN, uid)
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getNum())
+  param.card_reader = cast[int8](task["speaker"].getNum())
+  var pkt = param.encode_as(CommandType.VOLUME_DOWN, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send VOLUME_DOWN(speaker: ", play.card_reader, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send VOLUME_DOWN(speaker: ", param.card_reader, ", pin: ", cast[uint16](param.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref volume-down-confirm
@@ -901,6 +905,27 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "volume-down" and task["speaker"].getNum() == param.card_reader and cast[int16](task["pin"].getNum()) == param.pin:
+      <<remove-task>>
+#+end_src
+* CONFIG_GPRS
+** 下行命令
+#+begin_src nim :noweb-ref config-gprs
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getNum())
+  param.gprs_heart_rate = cast[int32](task["gprs-heart-rate"].getNum())
+  param.gprs_timeout = cast[int32](task["gprs-timeout"].getNum())
+  var pkt = param.encode_as(CommandType.CONFIG_GPRS, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send CONFIG_GPRS(gprs-heart-rate: ", param.gprs_heart_rate, ", gprs-timeout: ", param.gprs_timeout, ", pin: ", cast[uint16](param.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref config-gprs-confirm
+  info "Confirm cmd type is config-gprs-confirm"
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "config-gprs" and cast[int16](task["pin"].getNum()) == param.pin:
       <<remove-task>>
 #+end_src
 * 数据封包
