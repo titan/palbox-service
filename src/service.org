@@ -16,7 +16,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
     Task = tuple[uid: box_packer.UID, sockaddr: Sockaddr_in, data: seq[byte]]
     PinPair = tuple[pin: int16, expire_in: int64]
 
-  var device_connections: Table[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]] = initTable[box_packer.UID, tuple[expires_at: int, sockaddr: Sockaddr_in]]()
+  var device_connections: Table[box_packer.UID, tuple[name: string, expires_at: int, sockaddr: Sockaddr_in]] = initTable[box_packer.UID, tuple[name: string, expires_at: int, sockaddr: Sockaddr_in]]()
   var task_buffer: RingBuffer[Task] = newRingBuffer[Task](bitsize = 10)
   var pin_table: Table[box_packer.UID, RingBuffer[PinPair]] = initTable[box_packer.UID, RingBuffer[PinPair]]()
   var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
@@ -96,21 +96,27 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       # info hexdump(@(rcvbuf[]), len(rcvd))
       var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
       if data != nil:
+        let
+          name = await redis_client.hget("boxes", $data.uid)
+          box = if name == redisNil: $data.uid else: $data.uid & "(" & name & ")"
         case data.cmd_type:
           of CommandType.PING:
-            info "Receive PING from ", address, ":", saddr.sin_port
+            info "Receive PING from ", box, " @ ", address, ":", saddr.sin_port
             <<ping>>
+          of CommandType.PONG:
+            info "Receive PONG from ", box, " @ ", address, ":", saddr.sin_port
+            <<pong>>
           of CommandType.CONFIRM:
-            info "Receive CONFIRM of ", CommandType(data.parameter.cmd_type) , " from ", address, ":", saddr.sin_port
+            info "Receive CONFIRM of ", CommandType(data.parameter.cmd_type) , " from ", box, " @ ", address, ":", saddr.sin_port
             <<confirm>>
           of CommandType.LOCK_OFF:
-            info "Receive LOCK_OFF from ", address, ":", saddr.sin_port
+            info "Receive LOCK_OFF from ", box, " @ ", address, ":", saddr.sin_port
             <<client-lock-off>>
           of CommandType.LOCK_DATA:
-            info "Receive LOCK_DATA from ", address, ":", saddr.sin_port
+            info "Receive LOCK_DATA from ", box, " @ ", address, ":", saddr.sin_port
             <<lock-data>>
           else:
-            info "Receive UNKNOWN from ", address, ":", saddr.sin_port
+            info "Receive UNKNOWN from ", box, " @ ", address, ":", saddr.sin_port
       else:
         info "Receive invalid packet from ", address, ":", saddr.sin_port
 #+end_src
@@ -131,10 +137,11 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       let now = epochTime().toInt()
       for uid, pair in device_connections.pairs():
         let
-          expires_at = pair[0]
-          dst = pair[1]
+          box = pair[0]
+          expires_at = pair[1]
+          dst = pair[2]
         if expires_at < now:
-          warn "Connection of uid ", uid, " is expired"
+          warn "Connection of ", box, " is expired"
           device_connections.del(uid)
           continue
         let
@@ -234,6 +241,8 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                 <<volume-down>>
               of "config-gprs":
                 <<config-gprs>>
+              of "ping":
+                <<service-ping>>
               else:
                 let rpop_result = await redis_client.rpop(taskkey)
                 if rpop_result == redisNil:
@@ -274,22 +283,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     param = data.parameter
     sn = param.sn
   <<save-connections>>
-  #info "PING uid", $uid
-  let
-    rssi_key = "rssi." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
-    ping_key = "ping." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
-    reset_key = "reset." & $uid & "." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
-    reply_time = if param.reply_time == 0: 600 else: param.reply_time
-    ttl = if param.ttl == 0: 255 else: param.ttl
-    gprs_reset = param.gprs_reset
-    gprs_shutdown = param.gprs_shutdown
-  await redis_client.setk(rssi_key, $param.rssi)
-  await redis_client.setk(ping_key, $reply_time & "," & $ttl)
-  await redis_client.setk(reset_key, $gprs_shutdown & "," & $gprs_reset)
-  <<pong>>
-#+end_src
-* PONG
-#+begin_src nim :noweb-ref pong
+  <<save-gprs-status>>
   var pong_param: ref Parameter = new(Parameter)
   pong_param.sn = sn
   pong_param.version = 0
@@ -297,7 +291,42 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   pong_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = pong_param.encode_as(CommandType.PONG, uid)
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
-  info "Prepare to send PONG to ", uid, " @ ", address, ":", saddr.sin_port
+  info "Prepare to send PONG to ", box, " @ ", address, ":", saddr.sin_port
+#+end_src
+* SERVICE-PING
+服务也会给设备发送 PING，以便探知设备是否掉线。
+#+begin_src nim :noweb-ref service-ping
+  var ping: ref Parameter = new(Parameter)
+  ping.pin = cast[int16](task["pin"].getNum())
+  ping.zone = 8 * 60 * 60 * 1000
+  ping.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = ping.encode_as(CommandType.PING, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send PING(pin: ", cast[uint16](ping.pin) , ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+* PONG
+
+当 box service 给设备发送 PING 命令后，设备会给服务器返回 PONG 命令。
+通过这种方式，box service 可以主动探知设备是否在线。
+
+#+begin_src nim :noweb-ref pong
+  let
+    uid = data.uid
+    param = data.parameter
+    sn = param.sn
+  <<save-connections>>
+  <<save-gprs-status>>
+
+  let
+    taskkey = "tasks." & $uid
+    taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
+  if len(taskstrs) != 0:
+    for taskstr in taskstrs:
+      let task = try: parseJson(taskstr) except: nil
+      if task != nil and task["command"].getStr() == "ping" and cast[int16](task["pin"].getNum()) == param.pin:
+        <<remove-task>>
 #+end_src
 * CONFIRM
   收到设备发回的 CONFIRM 后，box service 去任务队列中查找对应的任务，并将其从任务
@@ -307,7 +336,9 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     uid = data.uid
     param = data.parameter
     sn = param.sn
+    name = await redis_client.hget("boxes", $uid)
   <<save-connections>>
+  <<save-gprs-status>>
   let
     taskkey = "tasks." & $uid
     cmd_type = case param.cmd_type:
@@ -337,7 +368,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   if len(taskstrs) == 0:
-    info "Nothing in task queue ", taskkey
+    info "Nothing in task queue ", taskkey, (if name != redisNil: " of " & name: else: "")
   case cmd_type:
     of CommandType.LOCK_OFF:
       <<lock-off-confirm>>
@@ -376,7 +407,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     of CommandType.CONFIG_GPRS:
       <<config-gprs-confirm>>
     else:
-      warn "Invalid command ", param.cmd_type
+      warn "Invalid command ", param.cmd_type, " from ", box
 #+end_src
 
 在确认的同时，需要确认消息记录到日志中。
@@ -397,6 +428,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     uid = data.uid
     param = data.parameter
     sn = param.sn
+    name = await redis_client.hget("boxes", $uid)
     lock = param.lock
     reader = param.card_reader
     card_no = cast[uint32](param.card_no)
@@ -411,7 +443,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   confirm.card_no = confirm.card_no
   let pkt = confirm.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
-  info "Prepare to send CONFIRM of LOCK_OFF to ", uid, " @ ", address, ":", saddr.sin_port
+  info "Prepare to send CONFIRM of LOCK_OFF to ", box, " @ ", address, ":", saddr.sin_port
   let timestamp = epochTime().toInt()
   #if param.timestamp + 5000 < timestamp * 1000:
   if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
@@ -495,7 +527,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_OFF(board: ", lock_off.board, ", lock: ", lock_off.lock , ", pin: ", cast[uint16](lock_off.pin) , ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_OFF(board: ", lock_off.board, ", lock: ", lock_off.lock , ", pin: ", cast[uint16](lock_off.pin) , ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-off-confirm
@@ -516,7 +548,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCKS_OFF(board: ", locks_off.board, ", locks: ", locks_off.locks, ", pins: ", locks_off.pins.mapIt(cast[uint16](it)), ") to ", uid, " @ ", address
+  info "Prepare to send LOCKS_OFF(board: ", locks_off.board, ", locks: ", locks_off.locks, ", pins: ", locks_off.pins.mapIt(cast[uint16](it)), ") to ", box, " @ ", address
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref locks-off-confirm
@@ -539,7 +571,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_STATUS(board: ", lock_status.board, ", pin: ", cast[uint16](lock_status.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_STATUS(board: ", lock_status.board, ", pin: ", cast[uint16](lock_status.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
@@ -567,7 +599,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_DETECT(board: ", lock_detect.board, ", pin: ", cast[uint16](lock_detect.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_DETECT(board: ", lock_detect.board, ", pin: ", cast[uint16](lock_detect.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-detect-confirm
@@ -595,7 +627,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LOCK_STATUS_DETECT(board: ", lock_status.board, ", pin: ", cast[uint16](lock_status.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LOCK_STATUS_DETECT(board: ", lock_status.board, ", pin: ", cast[uint16](lock_status.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 
@@ -666,7 +698,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   confirm_param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = confirm_param.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
-  info "Prepare to send CONFIRM of LOCK_DATA to ", uid, " @ ", address, ":", saddr.sin_port
+  info "Prepare to send CONFIRM of LOCK_DATA to ", box, " @ ", address, ":", saddr.sin_port
 #+end_src
 
 * LIGHT-ON
@@ -678,7 +710,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LIGHT_ON(pin: ", cast[uint16](light_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LIGHT_ON(pin: ", cast[uint16](light_on.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-on-confirm
@@ -697,7 +729,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send LIGHT_Off(pin: ", cast[uint16](light_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send LIGHT_Off(pin: ", cast[uint16](light_off.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref light-off-confirm
@@ -716,7 +748,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send FAN_ON(pin: ", cast[uint16](fan_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send FAN_ON(pin: ", cast[uint16](fan_on.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-on-confirm
@@ -735,7 +767,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send FAN_OFF(pin: ", cast[uint16](fan_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send FAN_OFF(pin: ", cast[uint16](fan_off.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref fan-off-confirm
@@ -754,7 +786,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send ULTRAVIOLET_ON(pin: ", cast[uint16](ultraviolet_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send ULTRAVIOLET_ON(pin: ", cast[uint16](ultraviolet_on.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-on-confirm
@@ -773,7 +805,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send ULTRAVIOLET_OFF(pin: ", cast[uint16](ultraviolet_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send ULTRAVIOLET_OFF(pin: ", cast[uint16](ultraviolet_off.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref ultraviolet-off-confirm
@@ -793,7 +825,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CAMERA_ON(pin: ", cast[uint16](camera_on.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CAMERA_ON(pin: ", cast[uint16](camera_on.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-on-confirm
@@ -812,7 +844,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CAMERA_OFF(pin: ", cast[uint16](camera_off.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CAMERA_OFF(pin: ", cast[uint16](camera_off.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref camera-off-confirm
@@ -831,7 +863,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CHARGER_STATUS(pin: ", cast[uint16](charger_status.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CHARGER_STATUS(pin: ", cast[uint16](charger_status.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
@@ -857,7 +889,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send PLAY(speaker: ", play.card_reader, ", audio: ", play.audio, ", pin: ", cast[uint16](play.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send PLAY(speaker: ", play.card_reader, ", audio: ", play.audio, ", pin: ", cast[uint16](play.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref play-confirm
@@ -877,7 +909,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send VOLUME_UP(speaker: ", param.card_reader, ", pin: ", cast[uint16](param.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send VOLUME_UP(speaker: ", param.card_reader, ", pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref volume-up-confirm
@@ -897,7 +929,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send VOLUME_DOWN(speaker: ", param.card_reader, ", pin: ", cast[uint16](param.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send VOLUME_DOWN(speaker: ", param.card_reader, ", pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref volume-down-confirm
@@ -918,7 +950,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CONFIG_GPRS(gprs-heart-rate: ", param.gprs_heart_rate, ", gprs-timeout: ", param.gprs_timeout, ", pin: ", cast[uint16](param.pin), ") to ", uid, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CONFIG_GPRS(gprs-heart-rate: ", param.gprs_heart_rate, ", gprs-timeout: ", param.gprs_timeout, ", pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref config-gprs-confirm
@@ -1037,14 +1069,50 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 * 支援方法
 ** 保存连接
 
-将设备的地址和对应的 Socket Address 保存到 device_connections 中，以后可以根据此
-地址，主动给设备发送数据。同时把设备的地址加入到当前活跃设备集合中。
+将设备的地址和对应的 Socket Address 保存到 device_connections 中，以后
+可以根据此地址，主动给设备发送数据。同时把设备的地址加入到当前活跃设备
+集合中。每个连接至少可以维持 60 秒。
 
 #+begin_src nim :noweb-ref save-connections
-  device_connections[uid] = (expires_at: epochTime().toInt() + 60 * 1024, sockaddr: saddr)
-  let activated_key = "box.activated." & getDateStr() & "." & $getLocalTime(getTime()).hour.format("02d") & "." & $getLocalTime(getTime()).minute.format("02d")
+  if device_connections.has_key(uid):
+    let pair = device_connections[uid]
+    device_connections[uid] = (name: pair[0], expires_at: epochTime().toInt() + 60, sockaddr: saddr)
+  else:
+    let name = await redis_client.hget("boxes", $uid)
+    device_connections[uid] = (name: if name == redisNil: $uid else: $uid & "(" & name & ")", expires_at: epochTime().toInt() + 60, sockaddr: saddr)
+  let
+    t = getTime()
+    activated_key = "box.activated." & getDateStr() & "." & $local(t).hour.format("02d") & "." & $local(t).minute.format("02d")
   discard await redis_client.sAdd(activated_key, $uid)
 #+end_src
+
+** 保存 GPRS 状态
+
+每一个从设备发送到 box service 的命令都携带了设备的 GPRS 状态信息。需
+要将这些信息保存在缓存中，供数据挖掘程序使用。
+
+#+begin_src nim :noweb-ref save-gprs-status
+  let
+    rssi_key = "rssi." & $uid & "." & getDateStr() & "." & $local(t).hour.format("02d") & "." & $local(t).minute.format("02d")
+    ping_key = "ping." & $uid & "." & getDateStr() & "." & $local(t).hour.format("02d") & "." & $local(t).minute.format("02d")
+    reset_key = "reset." & $uid & "." & getDateStr() & "." & $local(t).hour.format("02d") & "." & $local(t).minute.format("02d")
+    rssi = param.rssi
+    ber = param.ber
+    reply_time = if param.reply_time == 600: -1 else: param.reply_time
+    ttl = if param.ttl == 255: -1 else: param.ttl
+    gprs_reset = param.gprs_reset
+    gprs_shutdown = param.gprs_shutdown
+  await redis_client.multi()
+  if rssi != 0 or ber != 0:
+    await redis_client.setk(rssi_key, $rssi & "," & $ber)
+  if reply_time != 0 or ttl != 0:
+    await redis_client.setk(ping_key, $reply_time & "," & $ttl)
+  if gprs_shutdown != 0 or gprs_reset != 0:
+    await redis_client.setk(reset_key, $gprs_shutdown & "," & $gprs_reset)
+  discard await redis_client.exec()
+#+end_src
+
+时间 t 由前一个代码块提供。
 
 ** hexdump
 
