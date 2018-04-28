@@ -165,12 +165,12 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
               discard await redis_client.rpush(key = logkey, value = $job)
             let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
             if lrem_result == 0:
-              warn "Cannot remove expired task ", taskstr, " from ", taskkey
+              warn "Cannot remove expired task ", taskstr, " from ", taskkey, " of ", box
             else:
               task["status"] = % "expired"
               task["occurred-at"] = %(getDateStr() & " " & getClockStr())
               discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
-              info "Remove expired task ", taskstr, " from ", taskkey
+              info "Remove expired task ", taskstr, " from ", taskkey, " of ", box
               operation_count += 1
           else:
             if sending_time.contains(uid):
@@ -178,7 +178,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                 continue
             sending_time[uid] = now
             operation_count += 1
-            info "Found task for ", $uid
+            info "Found task of ", box
             let
               tasklog_key = "tasklog." & $uid & "." & getDateStr()
               tasklog_len = cast[int](await redis_client.llen(tasklog_key))
