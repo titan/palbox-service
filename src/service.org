@@ -40,13 +40,17 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc send_always(sock: AsyncFD) {.async.} =
+    let redis_client: AsyncRedis = await openAsync()
     var
       sndbuf: ref array[1024, byte] = new(array[1024, byte])
       address = newString(128)
       slen = sizeof(Sockaddr_in).SockLen
     while true:
       if len(task_buffer) > 0:
-        let task = pop(task_buffer)
+        let
+          task = pop(task_buffer)
+          name = await redis_client.hget("boxes", $task.uid)
+          box = if name == redisNil: $task.uid else: $task.uid & "(" & name & ")"
         zeroMem(cast[pointer](sndbuf), 1024)
         let encoded = base64.encode[byte](task.data, lineLen = 1024)
         for i in 0..(len(encoded) - 1):
@@ -56,11 +60,11 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         yield sendto_future
         if sendto_future.failed:
           device_connections.del(task.uid)
-          error "Send ", len(encoded), " byte(s) to ", task.uid, " @ ", address, ":", dst.sin_port, " failed"
+          error "Send ", len(encoded), " byte(s) to ", box, " @ ", address, ":", dst.sin_port, " failed"
           continue
         discard inet_ntop(posix.AF_INET, cast[pointer](addr dst.sin_addr), cstring(address), len(address).int32)
         address = address.strip(chars = {'\0'})
-        info "Send ", len(encoded), " byte(s) to ", task.uid, " @ ", address, ":", dst.sin_port, ": ", encoded
+        info "Send ", len(encoded), " byte(s) to ", box, " @ ", address, ":", dst.sin_port, ": ", encoded
       else:
         await sleepAsync(1000)
 #+end_src
@@ -152,14 +156,20 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
           continue
         else:
           let task = try: parseJson(taskstr) except: nil
-          if task == nil or task["expires-at"].getNum() < now:
+          if task == nil:
+            let lpop_result = await redis_client.lpop(taskkey)
+            if lpop_result == redisNil:
+              warn "Pop ", taskkey, " failed"
+            continue
+          let qos = if task.has_key("qos") and task["qos"].getStr() == "<=1": "<=1" else: ">=1"
+          if qos == ">=1" and task["expires-at"].getInt() < now:
             if task["command"].getStr() == "lock-off" or task["command"].getStr() == "locks-off":
-              # send a fan-on command to box device to check gprs network status
+              # send a fan-on command to box device to check network status
               let
                 pin = generate_pin(1)
                 jobkey = "tasks." & $uid
                 logkey = "tasklog." & $uid & "." & getDateStr()
-                job = %*{"command": "fan-on", "expires-at": epochTime().toInt() + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+                job = %*{"command": "fan-on", "qos": "<=1", "expires-at": epochTime().toInt() + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
               discard await redis_client.lpush(key = jobkey, value = $job)
               #discard await redis_client.expire(key = jobkey, seconds = 86400)
               discard await redis_client.rpush(key = logkey, value = $job)
@@ -186,15 +196,15 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
             var found_log = false
             for logstr in tasklogs:
               let log = try: parseJson(logstr) except: nil
-              if log != nil and task["command"].getStr() == log["command"].getStr() and task["expires-at"].getNum() == log["expires-at"].getNum():
-                if log.has_key("pin") and task.has_key("pin") and log["pin"].getNum() == task["pin"].getNum():
+              if log != nil and task["command"].getStr() == log["command"].getStr() and task["expires-at"].getInt() == log["expires-at"].getInt():
+                if log.has_key("pin") and task.has_key("pin") and log["pin"].getInt() == task["pin"].getInt():
                   if log["status"].getStr() == "sending":
                     found_log = true
                     break
                 elif log.has_key("pins") and task.has_key("pins") and len(log["pins"]) == len(task["pins"]):
                   var found_pins = true
                   for i in 0..len(log["pins"]) - 1:
-                    if log["pins"][i].getNum() != task["pins"][i].getNum():
+                    if log["pins"][i].getInt() != task["pins"][i].getInt():
                       found_pins = false
                       break
                   if found_pins and log["status"].getStr() == "sending":
@@ -204,6 +214,10 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
               task["status"] = % "sending"
               task["occurred-at"] = %(getDateStr() & " " & getClockStr())
               discard await redis_client.rpush(tasklog_key, $task)
+            if qos == "<=1":
+              let lpop_result = await redis_client.lpop(taskkey)
+              if lpop_result == redisNil:
+                warn "Pop ", taskkey, " failed"
             case task["command"].getStr():
               of "lock-off":
                 <<lock-off>>
@@ -239,13 +253,13 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                 <<volume-up>>
               of "volume-down":
                 <<volume-down>>
-              of "config-gprs":
-                <<config-gprs>>
+              of "config-network":
+                <<config-network>>
               of "ping":
                 <<service-ping>>
               else:
-                let rpop_result = await redis_client.rpop(taskkey)
-                if rpop_result == redisNil:
+                let lpop_result = await redis_client.lpop(taskkey)
+                if lpop_result == redisNil:
                   warn "Pop ", taskkey, " failed"
       if operation_count == 0:
         await sleepAsync(1000)
@@ -283,7 +297,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     param = data.parameter
     sn = param.sn
   <<save-connections>>
-  <<save-gprs-status>>
+  <<save-network-status>>
   var pong_param: ref Parameter = new(Parameter)
   pong_param.sn = sn
   pong_param.version = 0
@@ -297,7 +311,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 服务也会给设备发送 PING，以便探知设备是否掉线。
 #+begin_src nim :noweb-ref service-ping
   var ping: ref Parameter = new(Parameter)
-  ping.pin = cast[int16](task["pin"].getNum())
+  ping.pin = cast[int16](task["pin"].getInt())
   ping.zone = 8 * 60 * 60 * 1000
   ping.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = ping.encode_as(CommandType.PING, uid)
@@ -317,7 +331,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     param = data.parameter
     sn = param.sn
   <<save-connections>>
-  <<save-gprs-status>>
+  <<save-network-status>>
 
   let
     taskkey = "tasks." & $uid
@@ -325,7 +339,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   if len(taskstrs) != 0:
     for taskstr in taskstrs:
       let task = try: parseJson(taskstr) except: nil
-      if task != nil and task["command"].getStr() == "ping" and cast[int16](task["pin"].getNum()) == param.pin:
+      if task != nil and task["command"].getStr() == "ping" and cast[int16](task["pin"].getInt()) == param.pin:
         <<remove-task>>
 #+end_src
 * CONFIRM
@@ -338,7 +352,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     sn = param.sn
     name = await redis_client.hget("boxes", $uid)
   <<save-connections>>
-  <<save-gprs-status>>
+  <<save-network-status>>
   let
     taskkey = "tasks." & $uid
     cmd_type = case param.cmd_type:
@@ -364,7 +378,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                  of 19: CommandType.PLAY
                  of 20: CommandType.VOLUME_UP
                  of 21: CommandType.VOLUME_DOWN
-                 of 22: CommandType.CONFIG_GPRS
+                 of 22: CommandType.CONFIG_NETWORK
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   if len(taskstrs) == 0:
@@ -404,8 +418,8 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       <<volume-up-confirm>>
     of CommandType.VOLUME_DOWN:
       <<volume-down-confirm>>
-    of CommandType.CONFIG_GPRS:
-      <<config-gprs-confirm>>
+    of CommandType.CONFIG_NETWORK:
+      <<config-network-confirm>>
     else:
       warn "Invalid command ", param.cmd_type, " from ", box
 #+end_src
@@ -477,7 +491,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         let
           tkey = "tasks." & $uid
           audio = if lock == 0:
-                    case resp["code"].getNum():
+                    case resp["code"].getInt():
                       of 1: 10
                       of -318: 12
                       of -350: 12
@@ -491,7 +505,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
                       of -80: 14
                       else: 0
                   else:
-                    case resp["code"].getNum():
+                    case resp["code"].getInt():
                       of 1: 4
                       of -341: 5
                       of -137: 6
@@ -520,9 +534,9 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref lock-off
   var lock_off: ref Parameter = new(Parameter)
-  lock_off.board = cast[int8](task["board"].getNum())
-  lock_off.lock = cast[int8](task["lock"].getNum())
-  lock_off.pin = cast[int16](task["pin"].getNum())
+  lock_off.board = cast[int8](task["board"].getInt())
+  lock_off.lock = cast[int8](task["lock"].getInt())
+  lock_off.pin = cast[int16](task["pin"].getInt())
   var pkt = lock_off.encode_as(CommandType.LOCK_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -534,16 +548,16 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "lock-off" and cast[int8](task["board"].getNum()) == param.board and cast[int8](task["lock"].getNum()) == param.lock:
+    if task != nil and task["command"].getStr() == "lock-off" and cast[int8](task["board"].getInt()) == param.board and cast[int8](task["lock"].getInt()) == param.lock:
       <<remove-task>>
 #+end_src
 * LOCKS-OFF
 ** 下行命令
 #+begin_src nim :noweb-ref locks-off
   var locks_off: ref Parameter = new(Parameter)
-  locks_off.board = cast[int8](task["board"].getNum())
-  locks_off.locks = task["locks"].getElems().mapIt(cast[int8](it.getNum()))
-  locks_off.pins = task["pins"].getElems().mapIt(cast[int16](it.getNum()))
+  locks_off.board = cast[int8](task["board"].getInt())
+  locks_off.locks = task["locks"].getElems().mapIt(cast[int8](it.getInt()))
+  locks_off.pins = task["pins"].getElems().mapIt(cast[int16](it.getInt()))
   var pkt = locks_off.encode_as(CommandType.LOCKS_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -556,8 +570,8 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   let locks = param.locks.foldl(a * b, 1)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "locks-off" and cast[int8](task["board"].getNum()) == param.board:
-      let lockstmp = task["locks"].getElems().foldl(a * b.getNum(), 1'i64)
+    if task != nil and task["command"].getStr() == "locks-off" and cast[int8](task["board"].getInt()) == param.board:
+      let lockstmp = task["locks"].getElems().foldl(a * b.getInt(), 1'i64)
       if locks == lockstmp:
         <<remove-task>>
 #+end_src
@@ -565,8 +579,8 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref lock-status
   var lock_status: ref Parameter = new(Parameter)
-  lock_status.board = cast[int8](task["board"].getNum())
-  lock_status.pin = cast[int16](task["pin"].getNum())
+  lock_status.board = cast[int8](task["board"].getInt())
+  lock_status.pin = cast[int16](task["pin"].getInt())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -586,15 +600,15 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         discard await redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "lock-status" and cast[int8](task["board"].getNum()) == param.board and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "lock-status" and cast[int8](task["board"].getInt()) == param.board and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
 * LOCK-DETECT
 ** 下行命令
 #+begin_src nim :noweb-ref lock-detect
   var lock_detect: ref Parameter = new(Parameter)
-  lock_detect.board = cast[int8](task["board"].getNum())
-  lock_detect.pin = cast[int16](task["pin"].getNum())
+  lock_detect.board = cast[int8](task["board"].getInt())
+  lock_detect.pin = cast[int16](task["pin"].getInt())
   var pkt = lock_detect.encode_as(CommandType.LOCK_DETECT, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -614,15 +628,15 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         discard redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getNum()) == param.board:
+    if task != nil and task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getInt()) == param.board:
       <<remove-task>>
 #+end_src
 * LOCK-STATUS-DETECT
 ** 下行命令
 #+begin_src nim :noweb-ref lock-status-detect
   var lock_status: ref Parameter = new(Parameter)
-  lock_status.board = cast[int8](task["board"].getNum())
-  lock_status.pin = cast[int16](task["pin"].getNum())
+  lock_status.board = cast[int8](task["board"].getInt())
+  lock_status.pin = cast[int16](task["pin"].getInt())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS_DETECT, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -653,7 +667,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
         discard await redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getNum()) == param.board:
+    if task != nil and task["command"].getStr() == "lock-status-detect" and cast[int8](task["board"].getInt()) == param.board:
       <<remove-task>>
 #+end_src
 * LOCK-DATA
@@ -705,7 +719,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref light-on
   var light_on: ref Parameter = new(Parameter)
-  light_on.pin = cast[int16](task["pin"].getNum())
+  light_on.pin = cast[int16](task["pin"].getInt())
   var pkt = light_on.encode_as(CommandType.LIGHT_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -724,7 +738,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref light-off
   var light_off: ref Parameter = new(Parameter)
-  light_off.pin = cast[int16](task["pin"].getNum())
+  light_off.pin = cast[int16](task["pin"].getInt())
   var pkt = light_off.encode_as(CommandType.LIGHT_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -743,7 +757,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref fan-on
   var fan_on: ref Parameter = new(Parameter)
-  fan_on.pin = cast[int16](task["pin"].getNum())
+  fan_on.pin = cast[int16](task["pin"].getInt())
   var pkt = fan_on.encode_as(CommandType.FAN_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -762,7 +776,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref fan-off
   var fan_off: ref Parameter = new(Parameter)
-  fan_off.pin = cast[int16](task["pin"].getNum())
+  fan_off.pin = cast[int16](task["pin"].getInt())
   var pkt = fan_off.encode_as(CommandType.FAN_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -781,7 +795,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref ultraviolet-on
   var ultraviolet_on: ref Parameter = new(Parameter)
-  ultraviolet_on.pin = cast[int16](task["pin"].getNum())
+  ultraviolet_on.pin = cast[int16](task["pin"].getInt())
   var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -800,7 +814,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref ultraviolet-off
   var ultraviolet_off: ref Parameter = new(Parameter)
-  ultraviolet_off.pin = cast[int16](task["pin"].getNum())
+  ultraviolet_off.pin = cast[int16](task["pin"].getInt())
   var pkt = ultraviolet_off.encode_as(CommandType.ULTRAVIOLET_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -820,7 +834,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref camera-on
   var camera_on: ref Parameter = new(Parameter)
-  camera_on.pin = cast[int16](task["pin"].getNum())
+  camera_on.pin = cast[int16](task["pin"].getInt())
   var pkt = camera_on.encode_as(CommandType.CAMERA_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -839,7 +853,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref camera-off
   var camera_off: ref Parameter = new(Parameter)
-  camera_off.pin = cast[int16](task["pin"].getNum())
+  camera_off.pin = cast[int16](task["pin"].getInt())
   var pkt = camera_off.encode_as(CommandType.CAMERA_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -882,9 +896,9 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 ** 下行命令
 #+begin_src nim :noweb-ref play
   var play: ref Parameter = new(Parameter)
-  play.pin = cast[int16](task["pin"].getNum())
-  play.audio = cast[int16](task["audio"].getNum())
-  play.card_reader = cast[int8](task["speaker"].getNum())
+  play.pin = cast[int16](task["pin"].getInt())
+  play.audio = cast[int16](task["audio"].getInt())
+  play.card_reader = cast[int8](task["speaker"].getInt())
   var pkt = play.encode_as(CommandType.PLAY, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -896,15 +910,15 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is play, speaker: ", param.card_reader, ", audio: ", param.audio
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "play" and task["speaker"].getNum() == param.card_reader and task["audio"].getNum() == param.audio and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "play" and task["speaker"].getInt() == param.card_reader and task["audio"].getInt() == param.audio and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
 * VOLUME_UP
 ** 下行命令
 #+begin_src nim :noweb-ref volume-up
   var param: ref Parameter = new(Parameter)
-  param.pin = cast[int16](task["pin"].getNum())
-  param.card_reader = cast[int8](task["speaker"].getNum())
+  param.pin = cast[int16](task["pin"].getInt())
+  param.card_reader = cast[int8](task["speaker"].getInt())
   var pkt = param.encode_as(CommandType.VOLUME_UP, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -916,15 +930,15 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is volume-up, speaker: ", param.card_reader
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "volume-up" and task["speaker"].getNum() == param.card_reader and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "volume-up" and task["speaker"].getInt() == param.card_reader and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
 * VOLUME_DOWN
 ** 下行命令
 #+begin_src nim :noweb-ref volume-down
   var param: ref Parameter = new(Parameter)
-  param.pin = cast[int16](task["pin"].getNum())
-  param.card_reader = cast[int8](task["speaker"].getNum())
+  param.pin = cast[int16](task["pin"].getInt())
+  param.card_reader = cast[int8](task["speaker"].getInt())
   var pkt = param.encode_as(CommandType.VOLUME_DOWN, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -936,28 +950,28 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   info "Confirm cmd type is volume-down, speaker: ", param.card_reader
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "volume-down" and task["speaker"].getNum() == param.card_reader and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "volume-down" and task["speaker"].getInt() == param.card_reader and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
-* CONFIG_GPRS
+* CONFIG_NETWORK
 ** 下行命令
-#+begin_src nim :noweb-ref config-gprs
+#+begin_src nim :noweb-ref config-network
   var param: ref Parameter = new(Parameter)
-  param.pin = cast[int16](task["pin"].getNum())
-  param.gprs_heart_rate = cast[int32](task["gprs-heart-rate"].getNum())
-  param.gprs_timeout = cast[int32](task["gprs-timeout"].getNum())
-  var pkt = param.encode_as(CommandType.CONFIG_GPRS, uid)
+  param.pin = cast[int16](task["pin"].getInt())
+  param.network_heart_rate = cast[int32](task["network-heart-rate"].getInt())
+  param.network_timeout = cast[int32](task["network-timeout"].getInt())
+  var pkt = param.encode_as(CommandType.CONFIG_NETWORK, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CONFIG_GPRS(gprs-heart-rate: ", param.gprs_heart_rate, ", gprs-timeout: ", param.gprs_timeout, ", pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CONFIG_NETWORK(network-heart-rate: ", param.network_heart_rate, ", network-timeout: ", param.network_timeout, ", pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
-#+begin_src nim :noweb-ref config-gprs-confirm
-  info "Confirm cmd type is config-gprs-confirm"
+#+begin_src nim :noweb-ref config-network-confirm
+  info "Confirm cmd type is config-network-confirm"
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "config-gprs" and cast[int16](task["pin"].getNum()) == param.pin:
+    if task != nil and task["command"].getStr() == "config-network" and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
 * 数据封包
@@ -966,7 +980,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_GPRS = 22
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
@@ -1086,12 +1100,12 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   discard await redis_client.sAdd(activated_key, $uid)
 #+end_src
 
-** 保存 GPRS 状态
+** 保存 NETWORK 状态
 
-每一个从设备发送到 box service 的命令都携带了设备的 GPRS 状态信息。需
+每一个从设备发送到 box service 的命令都携带了设备的 NETWORK 状态信息。需
 要将这些信息保存在缓存中，供数据挖掘程序使用。
 
-#+begin_src nim :noweb-ref save-gprs-status
+#+begin_src nim :noweb-ref save-network-status
   let
     rssi_key = "rssi." & $uid & "." & getDateStr() & "." & $local(t).hour.format("02d") & "." & $local(t).minute.format("02d")
     ping_key = "ping." & $uid & "." & getDateStr() & "." & $local(t).hour.format("02d") & "." & $local(t).minute.format("02d")
@@ -1100,15 +1114,15 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
     ber = param.ber
     reply_time = if param.reply_time == 600: -1 else: param.reply_time
     ttl = if param.ttl == 255: -1 else: param.ttl
-    gprs_reset = param.gprs_reset
-    gprs_shutdown = param.gprs_shutdown
+    network_reset = param.network_reset
+    network_shutdown = param.network_shutdown
   await redis_client.multi()
   if rssi != 0 or ber != 0:
     await redis_client.setk(rssi_key, $rssi & "," & $ber)
   if reply_time != 0 or ttl != 0:
     await redis_client.setk(ping_key, $reply_time & "," & $ttl)
-  if gprs_shutdown != 0 or gprs_reset != 0:
-    await redis_client.setk(reset_key, $gprs_shutdown & "," & $gprs_reset)
+  if network_shutdown != 0 or network_reset != 0:
+    await redis_client.setk(reset_key, $network_shutdown & "," & $network_reset)
   discard await redis_client.exec()
 #+end_src
 
