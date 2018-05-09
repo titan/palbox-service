@@ -71,7 +71,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 
 ** receive
 
-从设备接收数据。
+从设备接收数据。在删除已发送成功任务时，要去 tasks-pending 里查找任务。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc receive_always(sock: AsyncFD) {.async.} =
@@ -127,8 +127,28 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
 
 ** check task
 
-检查任务队列。第一步，从已经建立连接的设备任务队列中获取任务，如果任务过期了，就
-不发送任务；否则，就根据任务的类型将任务填充到 task_buffer 中。
+检查任务队列。第一步，从已经建立连接的设备任务队列中获取任务，如果任务
+过期了，就不发送任务，记录任务超时到日志中；否则，就根据任务的类型将任
+务填充到 task_buffer 中，并记录发送时间到日志中。任务队列中的未超时的
+任务由 receive 流程来删除。没有被删除的任务将持续发送到设备上，直到任
+务超时。
+
+先阶段，上诉的工作方式会在一个用户使用设备时，将设备锁住，直到操作完成，
+receive 流程主动删除任务；或者任务超时，被 check task 流程删除。在设备
+被锁住期间，所有任务都是不能发送给设备的，这样使得设备的实时性非常差。
+
+为了提高实时性，在缓存上引入循环队列来保存任务。上述工作方式变为：
+
+1. 当从原来的任务队列中收到一个 qos >= 1 的任务时，立刻发送给设备，同
+   时把任务添加到循环任务队列的末尾。
+
+2. 若循环队列不为空，则取出第一个不超时的任务发送给设备，同时把任务继
+   续加入到循环队列的末尾。
+
+3. 若 receive 流程收到任务的响应，则去循环队列中查找并删除任务。
+
+要注意，check task 流程在检查循环队列时，要休眠恰当的时间（比如按队列
+长度来计算休眠时间），以保证每个任务大概 3 秒钟可以重发一次。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc check_always() {.async.} =
@@ -150,120 +170,146 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
           continue
         let
           taskkey = "tasks." & $uid
-          taskstr = await redis_client.lindex(taskkey, 0)
+          taskstr = await redis_client.rpop(taskkey)
         if taskstr == redisNil:
           #warn "Got nothing in task queue ", taskkey
-          continue
+          #info "Task queue ", taskkey, " is empty"
+          <<handle-recycle-queue>>
         else:
           let task = try: parseJson(taskstr) except: nil
-          if task == nil:
-            let lpop_result = await redis_client.lpop(taskkey)
-            if lpop_result == redisNil:
-              warn "Pop ", taskkey, " failed"
-            continue
-          let qos = if task.has_key("qos") and task["qos"].getStr() == "<=1": "<=1" else: ">=1"
-          if qos == ">=1" and task["expires-at"].getInt() < now:
-            if task["command"].getStr() == "lock-off" or task["command"].getStr() == "locks-off":
-              # send a fan-on command to box device to check network status
+          if task != nil:
+            operation_count += 1
+            let qos = if task.has_key("qos") and task["qos"].getStr() == "<=1": "<=1" else: ">=1"
+            if qos == ">=1" and task["expires-at"].getInt() < now:
+              # send a ping command to box device to check network status
               let
                 pin = generate_pin(1)
                 jobkey = "tasks." & $uid
                 logkey = "tasklog." & $uid & "." & getDateStr()
-                job = %*{"command": "fan-on", "qos": "<=1", "expires-at": epochTime().toInt() + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
-              discard await redis_client.lpush(key = jobkey, value = $job)
-              #discard await redis_client.expire(key = jobkey, seconds = 86400)
+                job = %*{"command": "ping", "qos": "<=1", "expires-at": epochTime().toInt() + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+              await redis_client.multi()
+              discard await redis_client.rpush(key = jobkey, value = $job)
+              discard await redis_client.expire(key = jobkey, seconds = 86400)
               discard await redis_client.rpush(key = logkey, value = $job)
-            let lrem_result = await redis_client.lrem(taskkey, taskstr, 1)
-            if lrem_result == 0:
-              warn "Cannot remove expired task ", taskstr, " from ", taskkey, " of ", box
-            else:
+              discard await redis_client.exec()
               task["status"] = % "expired"
               task["occurred-at"] = %(getDateStr() & " " & getClockStr())
-              discard await redis_client.rpush("tasklog." & $uid & "." & getDateStr(), $task)
+              discard await redis_client.rpush(logkey, $task)
               info "Remove expired task ", taskstr, " from ", taskkey, " of ", box
-              operation_count += 1
-          else:
-            if sending_time.contains(uid):
-              if now - sending_time[uid] < 2: # Don't resend in 2 seconds
-                continue
-            sending_time[uid] = now
-            operation_count += 1
-            info "Found task of ", box
-            let
-              tasklog_key = "tasklog." & $uid & "." & getDateStr()
-              tasklog_len = cast[int](await redis_client.llen(tasklog_key))
-              tasklogs = if tasklog_len > 100: await redis_client.lrange(tasklog_key, tasklog_len - 100, tasklog_len - 1) else: await redis_client.lrange(tasklog_key, 0, -1)
-            var found_log = false
-            for logstr in tasklogs:
-              let log = try: parseJson(logstr) except: nil
-              if log != nil and task["command"].getStr() == log["command"].getStr() and task["expires-at"].getInt() == log["expires-at"].getInt():
-                if log.has_key("pin") and task.has_key("pin") and log["pin"].getInt() == task["pin"].getInt():
-                  if log["status"].getStr() == "sending":
-                    found_log = true
-                    break
-                elif log.has_key("pins") and task.has_key("pins") and len(log["pins"]) == len(task["pins"]):
-                  var found_pins = true
-                  for i in 0..len(log["pins"]) - 1:
-                    if log["pins"][i].getInt() != task["pins"][i].getInt():
-                      found_pins = false
+            else:
+              let pendingkey = "tasks-pending." & $uid
+              let
+                tasklog_key = "tasklog." & $uid & "." & getDateStr()
+                tasklog_len = cast[int](await redis_client.llen(tasklog_key))
+                tasklogs = if tasklog_len > 100: await redis_client.lrange(tasklog_key, tasklog_len - 100, tasklog_len - 1) else: await redis_client.lrange(tasklog_key, 0, -1)
+              var found_log = false
+              for logstr in tasklogs:
+                let log = try: parseJson(logstr) except: nil
+                if log != nil and task["command"].getStr() == log["command"].getStr() and task["expires-at"].getInt() == log["expires-at"].getInt():
+                  if log.has_key("pin") and task.has_key("pin") and log["pin"].getInt() == task["pin"].getInt():
+                    if log["status"].getStr() == "sending":
+                      found_log = true
                       break
-                  if found_pins and log["status"].getStr() == "sending":
-                    found_log = true
-                    break
-            if not found_log:
-              task["status"] = % "sending"
-              task["occurred-at"] = %(getDateStr() & " " & getClockStr())
-              discard await redis_client.rpush(tasklog_key, $task)
-            if qos == "<=1":
-              let lpop_result = await redis_client.lpop(taskkey)
-              if lpop_result == redisNil:
-                warn "Pop ", taskkey, " failed"
-            case task["command"].getStr():
-              of "lock-off":
-                <<lock-off>>
-              of "locks-off":
-                <<locks-off>>
-              of "lock-status":
-                <<lock-status>>
-              of "lock-detect":
-                <<lock-detect>>
-              of "lock-status-detect":
-                <<lock-status-detect>>
-              of "light-on":
-                <<light-on>>
-              of "light-off":
-                <<light-off>>
-              of "fan-on":
-                <<fan-on>>
-              of "fan-off":
-                <<fan-off>>
-              of "ultraviolet-on":
-                <<ultraviolet-on>>
-              of "ultraviolet-off":
-                <<ultraviolet-off>>
-              of "camera-on":
-                <<camera-on>>
-              of "camera-off":
-                <<camera-off>>
-              of "charger-status":
-                <<charger-status>>
-              of "play":
-                <<play>>
-              of "volume-up":
-                <<volume-up>>
-              of "volume-down":
-                <<volume-down>>
-              of "config-network":
-                <<config-network>>
-              of "ping":
-                <<service-ping>>
-              else:
-                let lpop_result = await redis_client.lpop(taskkey)
-                if lpop_result == redisNil:
-                  warn "Pop ", taskkey, " failed"
+                  elif log.has_key("pins") and task.has_key("pins") and len(log["pins"]) == len(task["pins"]):
+                    var found_pins = true
+                    for i in 0..len(log["pins"]) - 1:
+                      if log["pins"][i].getInt() != task["pins"][i].getInt():
+                        found_pins = false
+                        break
+                    if found_pins and log["status"].getStr() == "sending":
+                      found_log = true
+                      break
+              if not found_log:
+                task["status"] = % "sending"
+                task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+                discard await redis_client.rpush(tasklog_key, $task)
+              <<handle-tasks>>
+              if qos == ">=1":
+                # save task to recycle queue
+                discard await redis_client.lpush(pendingkey, $task)
+          <<handle-recycle-queue>>
       if operation_count == 0:
         await sleepAsync(1000)
 #+end_src
+
+
+*** 处理循环队列
+#+begin_src nim :noweb-ref handle-recycle-queue
+  let pendingkey = "tasks-pending." & $uid
+  if sending_time.contains(uid):
+    let
+      redis_pendinglen = await redis_client.llen(pendingkey)
+      pendinglen = cast[int](redis_pendinglen)
+      interval = int(3 / (if pendinglen < 3: 3 else: pendinglen))
+    if now - sending_time[uid] < interval: # Don't resend in interval seconds
+      continue
+  sending_time[uid] = now
+  let taskstr = await redis_client.rpoplpush(pendingkey, pendingkey)
+  if taskstr != redisNil:
+    let task = try: parseJson(taskstr) except: nil
+    if task == nil:
+      discard await redis_client.lpop(pendingkey)
+      continue
+    if task["expires-at"].getInt() < now:
+      let
+        pin = generate_pin(1)
+        logkey = "tasklog." & $uid & "." & getDateStr()
+      task["status"] = % "expired"
+      task["occurred-at"] = %(getDateStr() & " " & getClockStr())
+      await redis_client.multi()
+      discard await redis_client.lpop(pendingkey)
+      discard await redis_client.rpush(key = logkey, value = $task)
+      discard await redis_client.exec()
+      info "Remove expired task ", taskstr, " from ", pendingkey, " of ", box
+    else:
+      <<handle-tasks>>
+#+end_src
+
+*** 处理任务
+#+begin_src nim :noweb-ref handle-tasks
+  case task["command"].getStr():
+    of "lock-off":
+      <<lock-off>>
+    of "locks-off":
+      <<locks-off>>
+    of "lock-status":
+      <<lock-status>>
+    of "lock-detect":
+      <<lock-detect>>
+    of "lock-status-detect":
+      <<lock-status-detect>>
+    of "light-on":
+      <<light-on>>
+    of "light-off":
+      <<light-off>>
+    of "fan-on":
+      <<fan-on>>
+    of "fan-off":
+      <<fan-off>>
+    of "ultraviolet-on":
+      <<ultraviolet-on>>
+    of "ultraviolet-off":
+      <<ultraviolet-off>>
+    of "camera-on":
+      <<camera-on>>
+    of "camera-off":
+      <<camera-off>>
+    of "charger-status":
+      <<charger-status>>
+    of "play":
+      <<play>>
+    of "volume-up":
+      <<volume-up>>
+    of "volume-down":
+      <<volume-down>>
+    of "config-network":
+      <<config-network>>
+    of "ping":
+      <<service-ping>>
+    else:
+      discard await redis_client.rpop(pendingkey)
+#+end_src
+
 
 ** serve
 
@@ -334,7 +380,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   <<save-network-status>>
 
   let
-    taskkey = "tasks." & $uid
+    taskkey = "tasks-pending." & $uid
     taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   if len(taskstrs) != 0:
     for taskstr in taskstrs:
@@ -354,7 +400,7 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
   <<save-connections>>
   <<save-network-status>>
   let
-    taskkey = "tasks." & $uid
+    taskkey = "tasks-pending." & $uid
     cmd_type = case param.cmd_type:
                  of 0: CommandType.UNKNOWN
                  of 1: CommandType.PING
