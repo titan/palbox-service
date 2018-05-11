@@ -527,7 +527,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     info "Add pin of LOCK_OFF to ringbuffer"
     let
       bsclient = newAsyncHttpClient()
-      params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & $card_no
+      card_no_str = card_no.format("-010")
+      params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str
       path = if lock == 0: "swing/back" else: "swing/orsark"
       sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
     bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
