@@ -196,6 +196,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
               task["occurred-at"] = %(getDateStr() & " " & getClockStr())
               discard await redis_client.rpush(logkey, $task)
               info "Remove expired task ", taskstr, " from ", taskkey, " of ", box
+              <<handle-recycle-queue>>
             else:
               let pendingkey = "tasks-pending." & $uid
               let
@@ -227,7 +228,13 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
               if qos == ">=1":
                 # save task to recycle queue
                 discard await redis_client.lpush(pendingkey, $task)
-          <<handle-recycle-queue>>
+                let plen = await redis_client.llen(pendingkey)
+                if plen > 1:
+                  <<handle-recycle-queue>>
+              else:
+                <<handle-recycle-queue>>
+          else:
+            <<handle-recycle-queue>>
       if operation_count == 0:
         await sleepAsync(1000)
 #+end_src
