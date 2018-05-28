@@ -1,5 +1,7 @@
 * PROTOCAL
 
+** 老协议
+
 |                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl | network-reset | network-shutdown | network-heart-rate | network-timeout |
 |--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------+------------+-----+---------------+------------------+--------------------+-----------------|
 | PING               | ✓    | ✓   |      |           |       |      |        |          | ✓        |       |      | ✓           |         |             |       | ✓          | ✓   | ✓             | ✓                |                    |                 |
@@ -53,3 +55,137 @@
     (int 23 network-timeout) ;; NETWORK 超时时间，单位为 100ms
     )
 #+end_src
+
+** 新协议
+
+有效发起者列表
+
+| 命令           | 服务端 | 设备端 |
+|----------------+--------+--------|
+| PING           | ✓      | ✓      |
+| PONG           | ✓      | ✓      |
+| ACK            | ✓      | ✓      |
+| LOCK-OFF       | ✓      | ✓      |
+| LOCKS-OFF      | ✓      |        |
+| LOCK-STATUS    | ✓      |        |
+| LOCK-DATA      |        | ✓      |
+| SET-GPIO       | ✓      |        |
+| CLEAR-GPIO     | ✓      |        |
+| PLAY           | ✓      |        |
+| VOLUME         | ✓      |        |
+| CONFIG-NETWORK | ✓      |        |
+| CHARGERS       | ✓      |        |
+| CHARGERS-DATA  |        | ✓      |
+
+*** PIN 计算规则
+
+**** LOCKS-OFF/LOCK-OFF
+
+countdown + board + lock + timestamp
+
+**** LOCK-STATUS/LOCK-DATA
+
+countdown + board + [status] + timestamp
+
+**** SET-GPIO/CLEAR-GPIO
+
+countdown + gpio + on/off + timestamp
+
+**** PLAY
+
+countdown + speaker + audio + timestamp
+
+**** VOLUME
+
+countdown + speaker + volume + timestamp
+
+**** CONFIG-NETWORK
+
+countdown + heart-rate + timeout + timestamp
+
+**** CHARGERS
+
+countdown + chargers + timestamp
+
+**** CHARGERS-DATA
+
+countdown + chargers + timestamp
+
+*** request
+
+|                | zone | timestamp |  pins | card-no | chargers | battery  |
+|----------------+------+-----------+-------+---------+----------+----------|
+| PING           | [✓]  | [✓]       |       |         |          |          |
+| LOCK-OFF       | [✓]  | [✓]       |       | [✓]     |          |          |
+| LOCKS-OFF      | ✓    | ✓         |  ✓    |         |          |          |
+| LOCK-STATUS    |      |           |       |         |          |          |
+| LOCK-DATA      |      |           |       |         |          |          |
+| SET-GPIO       | ✓    | ✓         |       |         |          |          |
+| CLEAR-GPIO     | ✓    | ✓         |       |         |          |          |
+| PLAY           | ✓    | ✓         |       |         |          |          |
+| VOLUME         | ✓    | ✓         |       |         |          |          |
+| CONFIG-NETWORK | ✓    | ✓         |       |         |          |          |
+| CHARGERS       | ✓    | ✓         |       |         |          |          |
+| CHARGERS-DATA  |      |           |       |         | ✓        | ✓        |
+
+#+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
+  (struct request
+    (int 0 sn) ;; 请求序列号
+    (int 1 pin) ;; 命令的 PIN 值
+    (int 2 zone) ;; 时区
+    (long 3 timestamp) ;; 服务端时间戳
+    (int* 4 pins) ;; 开多个锁时的 PIN 列表
+    (int 5 card-no) ;; 卡编号(10位)
+    (int 6 chargers) ;; 充电状态
+    (byte* 7 battery) ;; 剩余电量
+    )
+#+end_src
+
+zone 和 timestamp 由发送方来决定是否携带这两个字段。如果发送方是
+service，则所有命令都要携带，如果发送方是设备端，则不携带。
+
+*** response
+
+|      | rssi | ber | zone | timestamp |  states | cmd-type | chargers | pins | card-no | reply-time | ttl | network-reset | network-shutdown |
+|------+------+-----+------+-----------+---------+----------+----------+------+---------+------------+-----+---------------+------------------|
+| PONG | [✓]  | [✓] | ✓    | ✓         |         |          |          |      |         |            |     |               |                  |
+| ACK  | [✓]  | [✓] | [✓]  | [✓]       |  [✓]    | ✓        | [✓]      | [✓]  | [✓]     | [✓]        | [✓] | [✓]           | [✓]              |
+
+ACK 命令中，各子命令允许携带的数据列表：
+
+| 命令           | states | chargers | pins | card-no  |
+|----------------+--------+----------+------+----------|
+| LOCK-OFF       |        |          |      | [✓]      |
+| LOCKS-OFF      |        |          | ✓    |          |
+| LOCK-STATUS    | ✓      |          |      |          |
+| LOCK-DATA      | ✓      |          |      |          |
+| SET-GPIO       |        |          |      |          |
+| CLEAR-GPIO     |        |          |      |          |
+| PLAY           |        |          |      |          |
+| VOLUME         |        |          |      |          |
+| CONFIG-NETWORK |        |          |      |          |
+| CHARGERS       |        | ✓        |      |          |
+| CHARGERS-DATA  |        |          |      |          |
+
+#+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
+  (struct response
+    (int 0 sn) ;; 请求序列号
+    (short 1 pin) ;; 命令的 PIN 值
+    (int 2 zone) ;; 时区
+    (long 3 timestamp) ;; 服务端时间戳
+    (byte 4 rssi) ;; 信号强度
+    (byte 5 ber) ;; 信号强度相关
+    (byte 6 cmd-type) ;; 确认命令类型
+    (short 7 reply-time) ;; PING 响应时间
+    (byte 8 ttl) ;; PING TTL
+    (int 9 network-reset) ;; NETWORK RESET 次数
+    (int 10 network-shutdown) ;; NETWORK SHUTDOWN 次数
+    (int 11 chargers) ;; 充电状态
+    (byte* 12 battery) ;; 剩余电量
+    )
+#+end_src
+
+zone 和 timestamp 由发送方来决定是否携带这两个字段。如果发送方是
+service，则所有命令都要携带，如果发送方是设备端，则不携带。
+
+rssi 和 ber 只能由设备端来发送。

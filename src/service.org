@@ -94,7 +94,10 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       if check_base64(rcvbuf, blen):
         info "Receive invalid base64 packet from ", address, ":", saddr.sin_port
         continue
-      let rcvd: string = base64.decode($cast[cstring](rcvbuf))
+      let rcvd: string = try: base64.decode($cast[cstring](rcvbuf)) except: nil
+      if rcvd == nil:
+        info "Decode invalid base64 packet from ", address, ":", saddr.sin_port
+        continue
       for i in 0..len(rcvd) - 1:
         rcvbuf[i] = cast[uint8](ord(rcvd[i]))
       # info hexdump(@(rcvbuf[]), len(rcvd))
@@ -311,6 +314,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<volume-down>>
     of "config-network":
       <<config-network>>
+    of "reboot":
+      <<reboot>>
     of "ping":
       <<service-ping>>
     else:
@@ -432,6 +437,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
                  of 20: CommandType.VOLUME_UP
                  of 21: CommandType.VOLUME_DOWN
                  of 22: CommandType.CONFIG_NETWORK
+                 of 31: CommandType.REBOOT
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   if len(taskstrs) == 0:
@@ -473,6 +479,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<volume-down-confirm>>
     of CommandType.CONFIG_NETWORK:
       <<config-network-confirm>>
+    of CommandType.REBOOT:
+      <<reboot-confirm>>
     else:
       warn "Invalid command ", param.cmd_type, " from ", box
 #+end_src
@@ -591,6 +599,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   lock_off.board = cast[int8](task["board"].getInt())
   lock_off.lock = cast[int8](task["lock"].getInt())
   lock_off.pin = cast[int16](task["pin"].getInt())
+  lock_off.zone = 8 * 60 * 60 * 1000
+  lock_off.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = lock_off.encode_as(CommandType.LOCK_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -612,6 +622,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   locks_off.board = cast[int8](task["board"].getInt())
   locks_off.locks = task["locks"].getElems().mapIt(cast[int8](it.getInt()))
   locks_off.pins = task["pins"].getElems().mapIt(cast[int16](it.getInt()))
+  locks_off.zone = 8 * 60 * 60 * 1000
+  locks_off.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = locks_off.encode_as(CommandType.LOCKS_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -635,6 +647,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   var lock_status: ref Parameter = new(Parameter)
   lock_status.board = cast[int8](task["board"].getInt())
   lock_status.pin = cast[int16](task["pin"].getInt())
+  lock_status.zone = 8 * 60 * 60 * 1000
+  lock_status.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -663,6 +677,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   var lock_detect: ref Parameter = new(Parameter)
   lock_detect.board = cast[int8](task["board"].getInt())
   lock_detect.pin = cast[int16](task["pin"].getInt())
+  lock_detect.zone = 8 * 60 * 60 * 1000
+  lock_detect.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = lock_detect.encode_as(CommandType.LOCK_DETECT, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -691,6 +707,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   var lock_status: ref Parameter = new(Parameter)
   lock_status.board = cast[int8](task["board"].getInt())
   lock_status.pin = cast[int16](task["pin"].getInt())
+  lock_status.zone = 8 * 60 * 60 * 1000
+  lock_status.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = lock_status.encode_as(CommandType.LOCK_STATUS_DETECT, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -774,6 +792,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref light-on
   var light_on: ref Parameter = new(Parameter)
   light_on.pin = cast[int16](task["pin"].getInt())
+  light_on.zone = 8 * 60 * 60 * 1000
+  light_on.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = light_on.encode_as(CommandType.LIGHT_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -793,6 +813,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref light-off
   var light_off: ref Parameter = new(Parameter)
   light_off.pin = cast[int16](task["pin"].getInt())
+  light_off.zone = 8 * 60 * 60 * 1000
+  light_off.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = light_off.encode_as(CommandType.LIGHT_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -812,6 +834,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref fan-on
   var fan_on: ref Parameter = new(Parameter)
   fan_on.pin = cast[int16](task["pin"].getInt())
+  fan_on.zone = 8 * 60 * 60 * 1000
+  fan_on.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = fan_on.encode_as(CommandType.FAN_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -831,6 +855,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref fan-off
   var fan_off: ref Parameter = new(Parameter)
   fan_off.pin = cast[int16](task["pin"].getInt())
+  fan_off.zone = 8 * 60 * 60 * 1000
+  fan_off.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = fan_off.encode_as(CommandType.FAN_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -850,6 +876,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref ultraviolet-on
   var ultraviolet_on: ref Parameter = new(Parameter)
   ultraviolet_on.pin = cast[int16](task["pin"].getInt())
+  ultraviolet_on.zone = 8 * 60 * 60 * 1000
+  ultraviolet_on.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = ultraviolet_on.encode_as(CommandType.ULTRAVIOLET_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -869,6 +897,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref ultraviolet-off
   var ultraviolet_off: ref Parameter = new(Parameter)
   ultraviolet_off.pin = cast[int16](task["pin"].getInt())
+  ultraviolet_off.zone = 8 * 60 * 60 * 1000
+  ultraviolet_off.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = ultraviolet_off.encode_as(CommandType.ULTRAVIOLET_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -889,6 +919,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref camera-on
   var camera_on: ref Parameter = new(Parameter)
   camera_on.pin = cast[int16](task["pin"].getInt())
+  camera_on.zone = 8 * 60 * 60 * 1000
+  camera_on.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = camera_on.encode_as(CommandType.CAMERA_ON, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -908,6 +940,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref camera-off
   var camera_off: ref Parameter = new(Parameter)
   camera_off.pin = cast[int16](task["pin"].getInt())
+  camera_off.zone = 8 * 60 * 60 * 1000
+  camera_off.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = camera_off.encode_as(CommandType.CAMERA_OFF, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -927,6 +961,9 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 下行命令
 #+begin_src nim :noweb-ref charger-status
   var charger_status: ref Parameter = new(Parameter)
+  charger_status.pin = cast[int16](task["pin"].getInt())
+  charger_status.zone = 8 * 60 * 60 * 1000
+  charger_status.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = charger_status.encode_as(CommandType.CHARGER_STATUS, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -953,6 +990,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   play.pin = cast[int16](task["pin"].getInt())
   play.audio = cast[int16](task["audio"].getInt())
   play.card_reader = cast[int8](task["speaker"].getInt())
+  play.zone = 8 * 60 * 60 * 1000
+  play.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = play.encode_as(CommandType.PLAY, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -973,6 +1012,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   var param: ref Parameter = new(Parameter)
   param.pin = cast[int16](task["pin"].getInt())
   param.card_reader = cast[int8](task["speaker"].getInt())
+  param.zone = 8 * 60 * 60 * 1000
+  param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = param.encode_as(CommandType.VOLUME_UP, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -993,6 +1034,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   var param: ref Parameter = new(Parameter)
   param.pin = cast[int16](task["pin"].getInt())
   param.card_reader = cast[int8](task["speaker"].getInt())
+  param.zone = 8 * 60 * 60 * 1000
+  param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = param.encode_as(CommandType.VOLUME_DOWN, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -1014,6 +1057,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   param.pin = cast[int16](task["pin"].getInt())
   param.network_heart_rate = cast[int32](task["network-heart-rate"].getInt())
   param.network_timeout = cast[int32](task["network-timeout"].getInt())
+  param.zone = 8 * 60 * 60 * 1000
+  param.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = param.encode_as(CommandType.CONFIG_NETWORK, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
@@ -1028,13 +1073,32 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     if task != nil and task["command"].getStr() == "config-network" and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
+* REBOOT
+** 下行命令
+#+begin_src nim :noweb-ref reboot
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getInt())
+  var pkt = param.encode_as(CommandType.REBOOT, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send REBOOT(pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref reboot-confirm
+  info "Confirm cmd type is reboot-confirm"
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "reboot" and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
 * 数据封包
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_servicepkg/box_packer.nim
   import parameter, zeropack
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, REBOOT = 31
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
@@ -1128,7 +1192,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       uid[i] = buf[offset + 1 + 1 + 1 + i]
     let unzipped: seq[byte] = unzeropack(buf, offset + header_size, length - header_size)
     let cmdtype = buf[offset + 1 + 1]
-    if cmdtype < 23:
+    if cmdtype < 23 or cmdtype == 31:
       result = PackResult(cmd_type: CommandType(cmdtype), uid: uid, parameter: parameter.decode_from(unzipped, 0))
     else:
       warn "Command type is invalid\n"
