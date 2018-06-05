@@ -53,6 +53,7 @@
     (int 21 network-shutdown) ;; NETWORK SHUTDOWN 次数
     (int 22 network-heart-rate) ;; NETWORK 心跳频率，必须为 pow(2, n) - 1, 3 < n < 9
     (int 23 network-timeout) ;; NETWORK 超时时间，单位为 100ms
+    (byte 24 volume) ;; 音量大小
     )
 #+end_src
 

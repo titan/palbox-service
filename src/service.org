@@ -516,6 +516,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   confirm.lock = lock
   confirm.card_reader = reader
   confirm.card_no = confirm.card_no
+  confirm.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  confirm.pin = pin
   let pkt = confirm.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
   info "Prepare to send CONFIRM of LOCK_OFF to ", box, " @ ", address, ":", saddr.sin_port
@@ -695,7 +697,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       if ((1 shl j) and state) != 0:
         discard await redis_client.setEx(skey, 5, "1")
       else:
-        discard redis_client.setEx(skey, 5, "0")
+        discard await redis_client.setEx(skey, 5, "0")
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "lock-detect" and cast[int8](task["board"].getInt()) == param.board:
