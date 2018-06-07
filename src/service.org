@@ -308,6 +308,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<charger-status>>
     of "play":
       <<play>>
+    of "volume":
+      <<volume>>
     of "volume-up":
       <<volume-up>>
     of "volume-down":
@@ -437,6 +439,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
                  of 20: CommandType.VOLUME_UP
                  of 21: CommandType.VOLUME_DOWN
                  of 22: CommandType.CONFIG_NETWORK
+                 of 23: CommandType.VOLUME
                  of 31: CommandType.REBOOT
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
@@ -479,6 +482,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<volume-down-confirm>>
     of CommandType.CONFIG_NETWORK:
       <<config-network-confirm>>
+    of CommandType.VOLUME:
+      <<volume-confirm>>
     of CommandType.REBOOT:
       <<reboot-confirm>>
     else:
@@ -1052,6 +1057,29 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     if task != nil and task["command"].getStr() == "volume-down" and task["speaker"].getInt() == param.card_reader and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
+* VOLUME
+** 下行命令
+#+begin_src nim :noweb-ref volume
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getInt())
+  param.volume = cast[int8](task["volume"].getInt())
+  param.card_reader = cast[int8](task["speaker"].getInt())
+  param.zone = 8 * 60 * 60 * 1000
+  param.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = param.encode_as(CommandType.VOLUME, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send VOLUME_DOWN(speaker: ", param.card_reader, ", pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref volume-confirm
+  info "Confirm cmd type is volume, speaker: ", param.card_reader, ", volume:", param.volume
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "volume" and task["speaker"].getInt() == param.card_reader and task["volume"].getInt() == param.volume and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
 * CONFIG_NETWORK
 ** 下行命令
 #+begin_src nim :noweb-ref config-network
@@ -1100,7 +1128,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, REBOOT = 31
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, VOLUME = 23, REBOOT = 31
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
@@ -1194,7 +1222,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       uid[i] = buf[offset + 1 + 1 + 1 + i]
     let unzipped: seq[byte] = unzeropack(buf, offset + header_size, length - header_size)
     let cmdtype = buf[offset + 1 + 1]
-    if cmdtype < 23 or cmdtype == 31:
+    if cmdtype < 24 or cmdtype == 31:
       result = PackResult(cmd_type: CommandType(cmdtype), uid: uid, parameter: parameter.decode_from(unzipped, 0))
     else:
       warn "Command type is invalid\n"
