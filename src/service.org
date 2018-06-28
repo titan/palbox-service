@@ -356,8 +356,11 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     uid = data.uid
     param = data.parameter
     sn = param.sn
+    version = param.version
+    apikey = "api." & $uid
   <<save-connections>>
   <<save-network-status>>
+  await redis_client.setk(apikey, $version)
   var pong_param: ref Parameter = new(Parameter)
   pong_param.sn = sn
   pong_param.version = 0

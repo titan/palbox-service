@@ -16,10 +16,12 @@ $(SERVERSRC): src/service.org | prebuild
 	#emacs $< --batch -f org-babel-tangle --kill
 
 $(BUILDSRC): src/build.org | prebuild
-	emacs $< --batch -f org-babel-tangle --kill
+	org-tangle $<
+	#emacs $< --batch -f org-babel-tangle --kill
 
 $(BUILDDIR)/src/proto.scm: src/proto.org | prebuild
-	emacs $< --batch -f org-babel-tangle --kill
+	org-tangle $<
+	#emacs $< --batch -f org-babel-tangle --kill
 
 $(PROTOSRC): $(BUILDDIR)/src/proto.scm | prebuild
 	tightrope -entity -serial -nim -d $(BUILDDIR)/src/box_servicepkg $<
