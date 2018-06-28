@@ -2,30 +2,34 @@
 
 ** 老协议
 
-|                    | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl | network-reset | network-shutdown | network-heart-rate | network-timeout |
-|--------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------+------------+-----+---------------+------------------+--------------------+-----------------|
-| PING               | ✓    | ✓   |      |           |       |      |        |          | ✓        |       |      | ✓           |         |             |       | ✓          | ✓   | ✓             | ✓                |                    |                 |
-| PONG               |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| CONFIRM            |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             | [✓]     | [✓]         |       |            |     |               |                  |                    |                 |
-| LOCK_OFF           |      |     |      |           | [✓]   | ✓    |        |          |          |       |      |             | [✓]     | [✓]         |       |            |     |               |                  |                    |                 |
-| LOCKS_OFF          |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |         |             |       |            |     |               |                  |                    |                 |
-| LOCK_STATUS        |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| LOCK_DETECT        |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| LOCK_STATUS_DETECT |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| LOCK_DATA          |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |         |             |       |            |     |               |                  |                    |                 |
-| LIGHT_ON           |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| LIGHT_OFF          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| FAN_ON             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| FAN_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| ULTRAVIOLET_ON     |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| ULTRAVIOLET_OFF    |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| CAMERA_ON          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| CAMERA_OFF         |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| CHARGER_STATUS     |      |     |      |           |       |      |        |          | ✓        |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| PLAY               |      |     |      |           |       |      |        |          |          |       |      |             |         |             | ✓     |            |     |               |                  |                    |                 |
-| VOLUME_UP          |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| VOLUME_DOWN        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |
-| CONFIG_NETWORK     |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  | ✓                  | ✓               |
+|                       | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl | network-reset | network-shutdown | network-heart-rate | network-timeout | volume | charger | charger-pluggined | charger-charging | charger-full | charger-heating | batteries | errno | enable-charing | enable-heating |
+|-----------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------+------------+-----+---------------+------------------+--------------------+-----------------+--------+---------+-------------------+------------------+--------------+-----------------+-----------+-------+----------------+----------------|
+| PING                  | ✓    | ✓   |      |           |       |      |        |          | ✓        |       |      | ✓           |         |             |       | ✓          | ✓   | ✓             | ✓                |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| PONG                  |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| CONFIRM               |      |     |      |           | [✓]   | [✓]  | [✓]    | ✓        |          | [✓]   |      |             | [✓]     | [✓]         |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LOCK_OFF              |      |     |      |           | [✓]   | ✓    |        |          |          |       |      |             | [✓]     | [✓]         |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LOCKS_OFF             |      |     |      |           | ✓     |      |        |          |          | ✓     | ✓    |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LOCK_STATUS           |      |     |      |           | ✓     | [✓]  |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LOCK_DETECT[x]        |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LOCK_STATUS_DETECT[x] |      |     |      |           | ✓     |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LOCK_DATA             |      |     |      |           | ✓     |      | ✓      |          |          | ✓     |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LIGHT_ON              |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| LIGHT_OFF             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| FAN_ON                |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| FAN_OFF               |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| ULTRAVIOLET_ON        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| ULTRAVIOLET_OFF       |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| CAMERA_ON             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| CAMERA_OFF            |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| CHARGER_STATUS        |      |     |      |           |       |      |        |          | ✓        |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| PLAY                  |      |     |      |           |       |      |        |          |          |       |      |             |         |             | ✓     |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| VOLUME_UP             |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| VOLUME_DOWN           |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
+| VOLUME                |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 | ✓      |         |                   |                  |              |                 |           |       |                |                |
+| CONFIG_NETWORK        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  | ✓                  | ✓               |        |         |                   |                  |              |                 |           |       |                |                |
+| CHARGER_STATUS        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        | ✓       |                   |                  |              |                 |           |       |                |                |
+| CHARGER_CONFIG        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        | ✓       |                   |                  |              |                 |           |       |                |                |
+| CONFIG_CHARGER        |      |     |      |           |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        | ✓       |                   |                  |              |                 |           |       | ✓              | ✓              |
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
   (struct parameter
@@ -36,7 +40,7 @@
     (byte 4 ber) ;; 信号强度相关
     (int 5 zone) ;; 时区
     (long 6 timestamp) ;; 服务端时间戳
-    (byte 7 board) ;; 锁控板编号
+    (byte 7 board) ;; 锁控板编号或充电器编号
     (byte 8 lock) ;; 锁编号
     (byte* 9 states) ;; 状态(和锁，测物条相关)
     (byte 10 cmd-type) ;; 确认命令类型
@@ -52,9 +56,18 @@
     (int 20 network-reset) ;; NETWORK RESET 次数
     (int 21 network-shutdown) ;; NETWORK SHUTDOWN 次数
     (int 22 network-heart-rate) ;; NETWORK 心跳频率，必须为 pow(2, n) - 1, 3 < n < 9
-    (int 23 network-timeout) ;; NETWORK 超时时间，单位为 100ms
+    (int 23 network-timeout) ;; NETWORK 超时时间，单位为 10 ms
     (byte 24 volume) ;; 音量大小
+    (byte 25 charger-pluggined) ;; 插入标志
+    (byte 26 charger-charging) ;; 充电中标志
+    (byte 27 charger-full) ;; 充满标志
+    (byte 28 charger-heating) ;; 加热中标志
+    (byte* 29 batteries) ;; 电量
+    (long 30 errno) ;; 故障编码
+    (byte 31 enable-charging) ;; 充电启用
+    (byte 32 enable-heating) ;; 加热启用
     )
+
 #+end_src
 
 ** 新协议
@@ -68,15 +81,14 @@
 | ACK            | ✓      | ✓      |
 | LOCK-OFF       | ✓      | ✓      |
 | LOCKS-OFF      | ✓      |        |
-| LOCK-STATUS    | ✓      |        |
-| LOCK-DATA      |        | ✓      |
+| LOCK-STATUS    | ✓      | ✓      |
+| READ-GPIO      | ✓      |        |
 | SET-GPIO       | ✓      |        |
-| CLEAR-GPIO     | ✓      |        |
 | PLAY           | ✓      |        |
 | VOLUME         | ✓      |        |
 | CONFIG-NETWORK | ✓      |        |
-| CHARGERS       | ✓      |        |
-| CHARGERS-DATA  |        | ✓      |
+| CHARGER-STATUS | ✓      |        |
+| CONFIG-CHARGER | ✓      |        |
 
 *** PIN 计算规则
 
@@ -114,20 +126,20 @@ countdown + chargers + timestamp
 
 *** request
 
-|                | zone | timestamp |  pins | card-no | chargers | battery  |
-|----------------+------+-----------+-------+---------+----------+----------|
-| PING           | [✓]  | [✓]       |       |         |          |          |
-| LOCK-OFF       | [✓]  | [✓]       |       | [✓]     |          |          |
-| LOCKS-OFF      | ✓    | ✓         |  ✓    |         |          |          |
-| LOCK-STATUS    |      |           |       |         |          |          |
-| LOCK-DATA      |      |           |       |         |          |          |
-| SET-GPIO       | ✓    | ✓         |       |         |          |          |
-| CLEAR-GPIO     | ✓    | ✓         |       |         |          |          |
-| PLAY           | ✓    | ✓         |       |         |          |          |
-| VOLUME         | ✓    | ✓         |       |         |          |          |
-| CONFIG-NETWORK | ✓    | ✓         |       |         |          |          |
-| CHARGERS       | ✓    | ✓         |       |         |          |          |
-| CHARGERS-DATA  |      |           |       |         | ✓        | ✓        |
+|                | zone | timestamp | board | locks | card-no | status | gpio | audio | volume | heart-rate | timeout | enable-charging | enable-heating |
+|----------------+------+-----------+-------+-------+---------+--------+------+-------+--------+------------+---------+-----------------+----------------|
+| PING           | [✓]  | [✓]       |       |       |         |        |      |       |        |            |         |                 |                |
+| LOCK-OFF       | [✓]  | [✓]       | [✓]   | ✓     | [✓]     |        |      |       |        |            |         |                 |                |
+| LOCKS-OFF      | ✓    | ✓         | ✓     |       |         |        |      |       |        |            |         |                 |                |
+| LOCK-STATUS    | [✓]  | [✓]       | ✓     |       |         | [✓]    |      |       |        |            |         |                 |                |
+| READ-GPIO      | ✓    | ✓         |       |       |         |        |      |       |        |            |         |                 |                |
+| SET-GPIO       | ✓    | ✓         |       |       |         |        | ✓    |       |        |            |         |                 |                |
+| PLAY           | ✓    | ✓         | ✓     |       |         |        |      | ✓     |        |            |         |                 |                |
+| VOLUME         | ✓    | ✓         | ✓     |       |         |        |      |       | ✓      |            |         |                 |                |
+| CONFIG-NETWORK | ✓    | ✓         |       |       |         |        |      |       |        | ✓          | ✓       |                 |                |
+| CHARGER-STATUS | ✓    | ✓         | ✓     |       |         |        |      |       |        |            |         |                 |                |
+| CHARGER-CONFIG | ✓    | ✓         | ✓     |       |         |        |      |       |        |            |         |                 |                |
+| CONFIG-CHARGER | ✓    | ✓         | ✓     |       |         |        |      |       |        |            |         | ✓               | ✓              |
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
   (struct request
@@ -135,10 +147,17 @@ countdown + chargers + timestamp
     (int 1 pin) ;; 命令的 PIN 值
     (int 2 zone) ;; 时区
     (long 3 timestamp) ;; 服务端时间戳
-    (int* 4 pins) ;; 开多个锁时的 PIN 列表
-    (int 5 card-no) ;; 卡编号(10位)
-    (int 6 chargers) ;; 充电状态
-    (byte* 7 battery) ;; 剩余电量
+    (byte 4 board) ;; 板编号（锁控，刷卡，充电）
+    (byte* 5 locks) ;; 锁编号
+    (int 6 card-no) ;; 卡编号(10位)
+    (byte* 7 status) ;; 状态列表（锁控）
+    (byte 8 gpio) ;; GPIO
+    (short 9 audio) ;; 音频编号
+    (byte 10 volume) ;; 音量
+    (byte 11 heart-rate) ;; 心跳频率, 必须为 pow(2, n) - 1, 3 < n < 9
+    (byte 12 timeout) ;; 网络超时时间，单位为 10 ms
+    (byte 13 enable-charging) ;; 允许充电
+    (byte 14 enable-heating) ;; 允许加热
     )
 #+end_src
 
@@ -147,26 +166,27 @@ service，则所有命令都要携带，如果发送方是设备端，则不携�
 
 *** response
 
-|      | rssi | ber | zone | timestamp |  states | cmd-type | chargers | pins | card-no | reply-time | ttl | network-reset | network-shutdown |
-|------+------+-----+------+-----------+---------+----------+----------+------+---------+------------+-----+---------------+------------------|
-| PONG | [✓]  | [✓] | ✓    | ✓         |         |          |          |      |         |            |     |               |                  |
-| ACK  | [✓]  | [✓] | [✓]  | [✓]       |  [✓]    | ✓        | [✓]      | [✓]  | [✓]     | [✓]        | [✓] | [✓]           | [✓]              |
+|      | rssi | ber | zone | timestamp | cmd-type | reset-times | reboot-times |
+|------+------+-----+------+-----------+----------+-------------+--------------|
+| PONG | [✓]  | [✓] | ✓    | ✓         |          |             |              |
+| ACK  | [✓]  | [✓] | [✓]  | [✓]       | ✓        | [✓]         | [✓]          |
 
 ACK 命令中，各子命令允许携带的数据列表：
 
-| 命令           | states | chargers | pins | card-no  |
-|----------------+--------+----------+------+----------|
-| LOCK-OFF       |        |          |      | [✓]      |
-| LOCKS-OFF      |        |          | ✓    |          |
-| LOCK-STATUS    | ✓      |          |      |          |
-| LOCK-DATA      | ✓      |          |      |          |
-| SET-GPIO       |        |          |      |          |
-| CLEAR-GPIO     |        |          |      |          |
-| PLAY           |        |          |      |          |
-| VOLUME         |        |          |      |          |
-| CONFIG-NETWORK |        |          |      |          |
-| CHARGERS       |        | ✓        |      |          |
-| CHARGERS-DATA  |        |          |      |          |
+
+| 命令           | status | gpio | charger-pluggined | charger-charging | charger-full | charger-heating | batteries | errno | enable-charging | enable-heating |
+|----------------+--------+------+-------------------+------------------+--------------+-----------------+-----------+-------+-----------------+----------------|
+| LOCK-OFF       |        |      |                   |                  |              |                 |           |       |                 |                |
+| LOCKS-OFF      |        |      |                   |                  |              |                 |           |       |                 |                |
+| LOCK-STATUS    | ✓      |      |                   |                  |              |                 |           |       |                 |                |
+| READ-GPIO      |        | ✓    |                   |                  |              |                 |           |       |                 |                |
+| SET-GPIO       |        |      |                   |                  |              |                 |           |       |                 |                |
+| PLAY           |        |      |                   |                  |              |                 |           |       |                 |                |
+| VOLUME         |        |      |                   |                  |              |                 |           |       |                 |                |
+| CONFIG-NETWORK |        |      |                   |                  |              |                 |           |       |                 |                |
+| CHARGER-STATUS |        |      | ✓                 | ✓                | ✓            | ✓               | ✓         | ✓     |                 |                |
+| CHARGER-CONFIG |        |      |                   |                  |              |                 |           |       | ✓               | ✓              |
+| CONFIG-CHARGER |        |      |                   |                  |              |                 |           |       |                 |                |
 
 #+begin_src scheme :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/proto.scm
   (struct response
@@ -175,14 +195,20 @@ ACK 命令中，各子命令允许携带的数据列表：
     (int 2 zone) ;; 时区
     (long 3 timestamp) ;; 服务端时间戳
     (byte 4 rssi) ;; 信号强度
-    (byte 5 ber) ;; 信号强度相关
+    (byte 5 ber) ;; 误码率
     (byte 6 cmd-type) ;; 确认命令类型
-    (short 7 reply-time) ;; PING 响应时间
-    (byte 8 ttl) ;; PING TTL
-    (int 9 network-reset) ;; NETWORK RESET 次数
-    (int 10 network-shutdown) ;; NETWORK SHUTDOWN 次数
-    (int 11 chargers) ;; 充电状态
-    (byte* 12 battery) ;; 剩余电量
+    (int 8 reset-times) ;; NETWORK RESET 次数
+    (int 9 reboot-times) ;; REBOOT 次数
+    (byte* 10 status) ;; 状态列表(锁控)
+    (byte 11 gpio) ;; GPIO
+    (byte 12 charger-pluggined) ;; 插入标志
+    (byte 13 charger-charging) ;; 充电中标志
+    (byte 14 charger-full) ;; 充满标志
+    (byte 15 charger-heating) ;; 加热中标志
+    (byte* 16 batteries) ;; 电量
+    (long 17 errno) ;; 故障编码
+    (byte 18 enable-charging) ;; 充电启用
+    (byte 19 enable-heating) ;; 加热启用
     )
 #+end_src
 

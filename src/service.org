@@ -306,6 +306,10 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<camera-off>>
     of "charger-status":
       <<charger-status>>
+    of "charger-config":
+      <<charger-config>>
+    of "config-charger":
+      <<config-charger>>
     of "play":
       <<play>>
     of "volume":
@@ -443,6 +447,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
                  of 21: CommandType.VOLUME_DOWN
                  of 22: CommandType.CONFIG_NETWORK
                  of 23: CommandType.VOLUME
+                 of 24: CommandType.CHARGER_CONFIG
+                 of 25: CommandType.CONFIG_CHARGER
                  of 31: CommandType.REBOOT
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
@@ -477,6 +483,10 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<camera-off-confirm>>
     of CommandType.CHARGER_STATUS:
       <<charger-status-confirm>>
+    of CommandType.CHARGER_CONFIG:
+      <<charger-config-confirm>>
+    of CommandType.CONFIG_CHARGER:
+      <<config-charger-confirm>>
     of CommandType.PLAY:
       <<play-confirm>>
     of CommandType.VOLUME_UP:
@@ -970,27 +980,92 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 * CHARGER-STATUS
 ** 下行命令
 #+begin_src nim :noweb-ref charger-status
-  var charger_status: ref Parameter = new(Parameter)
-  charger_status.pin = cast[int16](task["pin"].getInt())
-  charger_status.zone = 8 * 60 * 60 * 1000
-  charger_status.timestamp = cast[int64]((epochTime() * 1000).toInt())
-  var pkt = charger_status.encode_as(CommandType.CHARGER_STATUS, uid)
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getInt())
+  param.zone = 8 * 60 * 60 * 1000
+  param.board = cast[int8](task["charger"].getInt())
+  param.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = param.encode_as(CommandType.CHARGER_STATUS, uid)
   discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
   var saddr = dst
   <<ntop>>
-  info "Prepare to send CHARGER_STATUS(pin: ", cast[uint16](charger_status.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+  info "Prepare to send CHARGER_STATUS(pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref charger-status-confirm
-  info "Confirm cmd type is CHARGER_STATUS, charger1: ", param.chargers[0], ", charger2: ", param.chargers[1], ", charger3: ", param.chargers[2], ", charger4: ", param.chargers[3]
+  info "Confirm cmd type is CHARGER_STATUS, pin: ", param.pin
+  let
+    plugginedkey = "charger-pluggined." & $uid
+    chargingkey = "charger-charging." & $uid
+    fullkey = "charger-full." & $uid
+    heatingkey = "charger-heating." & $uid
+    errnokey = "charger-errno." & $uid
+  await redis_client.multi()
+  discard await redis_client.setEx(plugginedkey, 30, $param.charger_pluggined)
+  discard await redis_client.setEx(chargingkey, 30, $param.charger_charging)
+  discard await redis_client.setEx(fullkey, 30, $param.charger_full)
+  discard await redis_client.setEx(heatingkey, 30, $param.charger_heating)
+  discard await redis_client.setEx(errnokey, 30, $param.errno)
   for i in 0..len(param.chargers) - 1:
-    var
-      state = param.chargers[i]
-      skey = "charger-status." & $uid & "." & $(i + 1)
-    discard await redis_client.setEx(skey, 30, $state)
+    var skey = "charger-battery." & $uid & "." & $i
+    discard await redis_client.setEx(skey, 30, $param.batteries[i])
+  discard await redis_client.exec()
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "charger-status":
+    if task != nil and task["command"].getStr() == "charger-status" and task["pin"].getInt() == param.pin:
+      <<remove-task>>
+#+end_src
+* CHARGER-CONFIG
+** 下行命令
+#+begin_src nim :noweb-ref charger-config
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getInt())
+  param.zone = 8 * 60 * 60 * 1000
+  param.board = cast[int8](task["charger"].getInt())
+  param.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = param.encode_as(CommandType.CHARGER_CONFIG, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send CHARGER_CONFIG(pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref charger-config-confirm
+  info "Confirm cmd type is CHARGER_CONFIG, pin: ", param.pin
+  let
+    chargingkey = "charger-config." & $uid & ".enable-charging"
+    heatingkey = "charger-config." & $uid & ".enable-heating"
+  await redis_client.multi()
+  await redis_client.setk(chargingkey, $param.enable_charging)
+  await redis_client.setk(heatingkey, $param.enable_heating)
+  discard await redis_client.exec()
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "charger-config" and task["pin"].getInt() == param.pin:
+      <<remove-task>>
+#+end_src
+* CONFIG-CHARGER
+** 下行命令
+#+begin_src nim :noweb-ref config-charger
+  var param: ref Parameter = new(Parameter)
+  param.pin = cast[int16](task["pin"].getInt())
+  param.zone = 8 * 60 * 60 * 1000
+  param.board = cast[int8](task["charger"].getInt())
+  param.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  param.enable_charging = cast[int8](task["enable-charging"].getInt())
+  param.enable_heating = cast[int8](task["enable-heating"].getInt())
+  var pkt = param.encode_as(CommandType.CONFIG_CHARGER, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send CONFIG_CHARGER(enable-charging: ", $param.enable_charging, ", enable-heating: ", $param.enable_heating, ", pin: ", cast[uint16](param.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref config-charger-confirm
+  info "Confirm cmd type is CONFIG_CHARGER, pin: ", param.pin
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "config-charger" and task["pin"].getInt() == param.pin:
       <<remove-task>>
 #+end_src
 * PLAY
@@ -1131,7 +1206,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, VOLUME = 23, REBOOT = 31
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, VOLUME = 23, CHARGER_CONFIG = 24, CONFIG_CHARGER = 25, REBOOT = 31
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
