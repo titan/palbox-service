@@ -2,7 +2,7 @@
 
 ** 老协议
 
-|                       | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl | network-reset | network-shutdown | network-heart-rate | network-timeout | volume | charger | charger-pluggined | charger-charging | charger-full | charger-heating | batteries | errno | enable-charing | enable-heating |
+|                       | rssi | ber | zone | timestamp | board | lock | states | cmd-type | chargers | locks | pins | temperature | card-no | card-reader | audio | reply-time | ttl | network-reset | network-shutdown | network-heart-rate | network-timeout | volume | charger | charger-plugged | charger-charging | charger-full | charger-heating | batteries | errno | enable-charing | enable-heating |
 |-----------------------+------+-----+------+-----------+-------+------+--------+----------+----------+-------+------+-------------+---------+-------------+-------+------------+-----+---------------+------------------+--------------------+-----------------+--------+---------+-------------------+------------------+--------------+-----------------+-----------+-------+----------------+----------------|
 | PING                  | ✓    | ✓   |      |           |       |      |        |          | ✓        |       |      | ✓           |         |             |       | ✓          | ✓   | ✓             | ✓                |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
 | PONG                  |      |     | ✓    | ✓         |       |      |        |          |          |       |      |             |         |             |       |            |     |               |                  |                    |                 |        |         |                   |                  |              |                 |           |       |                |                |
@@ -58,7 +58,7 @@
     (int 22 network-heart-rate) ;; NETWORK 心跳频率，必须为 pow(2, n) - 1, 3 < n < 9
     (int 23 network-timeout) ;; NETWORK 超时时间，单位为 10 ms
     (byte 24 volume) ;; 音量大小
-    (byte 25 charger-pluggined) ;; 插入标志
+    (byte 25 charger-plugged) ;; 插入标志
     (byte 26 charger-charging) ;; 充电中标志
     (byte 27 charger-full) ;; 充满标志
     (byte 28 charger-heating) ;; 加热中标志
@@ -201,7 +201,7 @@ ACK 命令中，各子命令允许携带的数据列表：
     (int 9 reboot-times) ;; REBOOT 次数
     (byte* 10 status) ;; 状态列表(锁控)
     (byte 11 gpio) ;; GPIO
-    (byte 12 charger-pluggined) ;; 插入标志
+    (byte 12 charger-plugged) ;; 插入标志
     (byte 13 charger-charging) ;; 充电中标志
     (byte 14 charger-full) ;; 充满标志
     (byte 15 charger-heating) ;; 加热中标志
