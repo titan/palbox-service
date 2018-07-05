@@ -772,7 +772,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     sn = param.sn
     now = cast[int]((epochTime() * 1000).toInt() shr 10)
     timestamp = cast[int](param.timestamp shr 10)
-    expires_at = if now > timestamp: 5 else: timestamp - now
+    expires_in = if now > timestamp: 3600 else: timestamp - now
   <<save-connections>>
 
   info "LOCK-DATA, board: ", param.board, ", status: ", cast[uint8](param.states[0]), ", ", cast[uint8](param.states[1]), ", ", cast[uint8](param.states[2])
@@ -781,17 +781,9 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     for j in 0..7:
       var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
       if ((1 shl j) and state) != 0:
-        discard await redis_client.setEx(skey, expires_at, "1")
+        discard await redis_client.setEx(skey, expires_in, "1")
       else:
-        discard await redis_client.setEx(skey, expires_at, "0")
-  #for i in 0..len(param.locks) - 1:
-  #  var state = param.locks[i]
-  #  for j in 0..7:
-  #    var skey = "lock-detect." & $uid & "." & $param.board & "." & $((len(param.locks) - 1 - i) * 8 + j + 1)
-  #    if ((1 shl j) and state) != 0:
-  #      discard await redis_client.setEx(skey, expires_at, "1")
-  #    else:
-  #      discard await redis_client.setEx(skey, expires_at, "0")
+        discard await redis_client.setEx(skey, expires_in, "0")
   <<lock-data-confirm>>
 #+end_src
 ** 下行响应
