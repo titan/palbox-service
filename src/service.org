@@ -161,7 +161,9 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     var operation_count = 0
     while true:
       operation_count = 0 # did we do redis or send something?
-      let now = epochTime().toInt()
+      let
+        now_in_ms = (epochTime() * 1024).toInt()
+        now = now_in_ms shr 10
       for uid, pair in device_connections.pairs():
         let
           box = pair[0]
@@ -189,7 +191,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
                 pin = generate_pin(1)
                 jobkey = "tasks." & $uid
                 logkey = "tasklog." & $uid & "." & getDateStr()
-                job = %*{"command": "ping", "qos": "<=1", "expires-at": epochTime().toInt() + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+                #job = %*{"command": "ping", "qos": "<=1", "expires-at": epochTime().toInt() + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
+                job = %*{"command": "ping", "qos": "<=1", "expires-at": now + 5, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
               await redis_client.multi()
               discard await redis_client.rpush(key = jobkey, value = $job)
               discard await redis_client.expire(key = jobkey, seconds = 86400)
@@ -227,15 +230,18 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
                 task["status"] = % "sending"
                 task["occurred-at"] = %(getDateStr() & " " & getClockStr())
                 discard await redis_client.rpush(tasklog_key, $task)
-              <<handle-tasks>>
+              let plen = await redis_client.llen(pendingkey)
               if qos == ">=1":
                 # save task to recycle queue
                 discard await redis_client.lpush(pendingkey, $task)
-                let plen = await redis_client.llen(pendingkey)
                 if plen > 1:
                   <<handle-recycle-queue>>
+                else:
+                  <<handle-tasks>>
               else:
-                <<handle-recycle-queue>>
+                <<handle-tasks>>
+                if plen > 1:
+                  <<handle-recycle-queue>>
           else:
             <<handle-recycle-queue>>
       if operation_count == 0:
@@ -250,12 +256,13 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     let
       redis_pendinglen = await redis_client.llen(pendingkey)
       pendinglen = cast[int](redis_pendinglen)
-      interval = int(3 / (if pendinglen < 3: 3 else: pendinglen))
-    if now - sending_time[uid] < interval: # Don't resend in interval seconds
+      interval = int(3000 / (if pendinglen == 0: 1 else: pendinglen))
+    if now_in_ms - sending_time[uid] < interval: # Don't resend in interval microseconds
       continue
-  sending_time[uid] = now
+  sending_time[uid] = now_in_ms
   let taskstr = await redis_client.rpoplpush(pendingkey, pendingkey)
   if taskstr != redisNil:
+    operation_count += 1
     let task = try: parseJson(taskstr) except: nil
     if task == nil:
       discard await redis_client.lpop(pendingkey)
