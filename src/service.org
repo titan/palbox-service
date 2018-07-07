@@ -777,6 +777,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     uid = data.uid
     param = data.parameter
     sn = param.sn
+    pin = param.pin
     now = cast[int]((epochTime() * 1000).toInt() shr 10)
     timestamp = cast[int](param.timestamp shr 10)
     expires_in = if now > timestamp: 3600 else: timestamp - now
@@ -797,6 +798,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :noweb-ref lock-data-confirm
   var confirm_param: ref Parameter = new(Parameter)
   confirm_param.sn = sn
+  confirm_param.pin = pin
   confirm_param.version = 0
   confirm_param.cmd_type = 18 # CommandType.LOCK_DATA
   confirm_param.zone = 8 * 60 * 60 * 1000
