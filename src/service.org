@@ -530,6 +530,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     sn = param.sn
     name = await redis_client.hget("boxes", $uid)
     lock = param.lock
+    door = param.door
     reader = param.card_reader
     card_no = cast[uint32](param.card_no)
     pin = param.pin
@@ -539,6 +540,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   confirm.version = 0
   confirm.cmd_type = ord(CommandType.LOCK_OFF)
   confirm.lock = lock
+  confirm.door = door
   confirm.card_reader = reader
   confirm.card_no = confirm.card_no
   confirm.timestamp = cast[int64]((epochTime() * 1000).toInt())
@@ -563,8 +565,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     let
       bsclient = newAsyncHttpClient()
       card_no_str = card_no.format("-010")
-      params = if lock == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str
-      path = if lock == 0: "swing/back" else: "swing/orsark"
+      params = if lock == 0 and door == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str elif lock == 0: "mb=" & $uid & "&sno=" & $door & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str
+      path = if lock == 0 and door == 0: "swing/back" else: "swing/orsark"
       sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
     bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
     info "https://book.fengchaohuzhu.com/" & path

@@ -66,6 +66,7 @@
     (long 30 errno) ;; 故障编码
     (byte 31 enable-charging) ;; 充电启用
     (byte 32 enable-heating) ;; 加热启用
+    (int 33 door) ;; 柜门号
     )
 
 #+end_src
