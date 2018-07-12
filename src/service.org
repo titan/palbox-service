@@ -1038,8 +1038,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   info "Confirm cmd type is CHARGER_CONFIG, pin: ", param.pin
   let
     charger = $param.board
-    chargingkey = "charger-config." & $uid & "." & $charger & ".enable-charging"
-    heatingkey = "charger-config." & $uid & "." & $charger & ".enable-heating"
+    chargingkey = "charger-config.enable-charging." & $uid & "." & $charger
+    heatingkey = "charger-config.enable-heating." & $uid & "." & $charger
   await redis_client.multi()
   await redis_client.setk(chargingkey, $param.enable_charging)
   await redis_client.setk(heatingkey, $param.enable_heating)
@@ -1070,8 +1070,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   info "Confirm cmd type is CONFIG_CHARGER, pin: ", param.pin
   let
     charger = $param.board
-    chargingkey = "charger-config." & $uid & "." & $charger & ".enable-charging"
-    heatingkey = "charger-config." & $uid & "." & $charger & ".enable-heating"
+    chargingkey = "charger-config.enable-charging." & $uid & "." & $charger
+    heatingkey = "charger-config.enable-heating." & $uid & "." & $charger
   await redis_client.multi()
   await redis_client.setk(chargingkey, $param.enable_charging)
   await redis_client.setk(heatingkey, $param.enable_heating)
