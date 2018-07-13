@@ -1004,20 +1004,23 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     fullkey = "charger-full." & $uid & "." & $charger
     heatingkey = "charger-heating." & $uid & "." & $charger
     errnokey = "charger-errno." & $uid & "." & $charger
+    temperaturekey = "charger-temperature." & $uid & "." & $charger
   await redis_client.multi()
-  discard await redis_client.setEx(pluggedkey, 30, $param.charger_plugged)
-  discard await redis_client.setEx(chargingkey, 30, $param.charger_charging)
-  discard await redis_client.setEx(fullkey, 30, $param.charger_full)
-  discard await redis_client.setEx(heatingkey, 30, $param.charger_heating)
-  discard await redis_client.setEx(errnokey, 30, $param.errno)
+  await redis_client.setk(pluggedkey, $param.charger_plugged)
+  await redis_client.setk(chargingkey, $param.charger_charging)
+  await redis_client.setk(fullkey, $param.charger_full)
+  await redis_client.setk(heatingkey, $param.charger_heating)
+  await redis_client.setk(errnokey, $param.errno)
+  await redis_client.setk(temperaturekey, $param.temperature)
   for i in 0..len(param.chargers) - 1:
     var skey = "charger-battery." & $uid & "." & charger & "." & $i
-    discard await redis_client.setEx(skey, 30, $param.batteries[i])
+    await redis_client.setk(skey, $param.batteries[i])
   discard await redis_client.exec()
-  for taskstr in taskstrs:
-    let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "charger-status" and task["pin"].getInt() == param.pin:
-      <<remove-task>>
+  if param.pin != 0:
+    for taskstr in taskstrs:
+      let task = try: parseJson(taskstr) except: nil
+      if task != nil and task["command"].getStr() == "charger-status" and task["pin"].getInt() == param.pin:
+        <<remove-task>>
 #+end_src
 * CHARGER-CONFIG
 ** 下行命令
