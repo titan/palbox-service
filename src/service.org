@@ -1012,7 +1012,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   await redis_client.setk(heatingkey, $param.charger_heating)
   await redis_client.setk(errnokey, $param.errno)
   await redis_client.setk(temperaturekey, $param.temperature)
-  for i in 0..len(param.chargers) - 1:
+  for i in 0..len(param.batteries) - 1:
     var skey = "charger-battery." & $uid & "." & charger & "." & $i
     await redis_client.setk(skey, $param.batteries[i])
   discard await redis_client.exec()
