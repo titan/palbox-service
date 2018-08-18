@@ -782,7 +782,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     pin = param.pin
     now = cast[int]((epochTime() * 1000).toInt() shr 10)
     timestamp = cast[int](param.timestamp shr 10)
-    expires_in = if now > timestamp: 3600 else: timestamp - now
+    expires_in = if now >= timestamp: 3600 else: timestamp - now
   <<save-connections>>
 
   info "LOCK-DATA, board: ", param.board, ", status: ", cast[uint8](param.states[0]), ", ", cast[uint8](param.states[1]), ", ", cast[uint8](param.states[2])
@@ -1006,15 +1006,15 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     errnokey = "charger-errno." & $uid & "." & $charger
     temperaturekey = "charger-temperature." & $uid & "." & $charger
   await redis_client.multi()
-  await redis_client.setk(pluggedkey, $param.charger_plugged)
-  await redis_client.setk(chargingkey, $param.charger_charging)
-  await redis_client.setk(fullkey, $param.charger_full)
-  await redis_client.setk(heatingkey, $param.charger_heating)
-  await redis_client.setk(errnokey, $param.errno)
-  await redis_client.setk(temperaturekey, $param.temperature)
+  discard await redis_client.setEx(pluggedkey, 600, $param.charger_plugged)
+  discard await redis_client.setEx(chargingkey, 600, $param.charger_charging)
+  discard await redis_client.setEx(fullkey, 600, $param.charger_full)
+  discard await redis_client.setEx(heatingkey, 600, $param.charger_heating)
+  discard await redis_client.setEx(errnokey, 600, $param.errno)
+  discard await redis_client.setEx(temperaturekey, 600, $param.temperature)
   for i in 0..len(param.batteries) - 1:
     var skey = "charger-battery." & $uid & "." & charger & "." & $i
-    await redis_client.setk(skey, $param.batteries[i])
+    discard await redis_client.setEx(skey, 600, $param.batteries[i])
   discard await redis_client.exec()
   if param.pin != 0:
     for taskstr in taskstrs:
