@@ -122,6 +122,12 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
           of CommandType.LOCK_DATA:
             info "Receive LOCK_DATA from ", box, " @ ", address, ":", saddr.sin_port
             <<lock-data>>
+          of CommandType.EGG_FALLEN:
+            info "Receive EGG_FALLEN from ", box, " @ ", address, ":", saddr.sin_port
+            <<egg-fallen>>
+          of CommandType.EGG_TIMEOUT:
+            info "Receive EGG_TIMEOUT from ", box, " @ ", address, ":", saddr.sin_port
+            <<egg-timeout>>
           else:
             info "Receive UNKNOWN from ", box, " @ ", address, ":", saddr.sin_port
       else:
@@ -331,6 +337,18 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<reboot>>
     of "ping":
       <<service-ping>>
+    of "egg-lock-on":
+      <<egg-lock-on>>
+    of "egg-lock-off":
+      <<egg-lock-off>>
+    of "egg-play":
+      <<egg-play>>
+    of "egg-gpio":
+      <<egg-gpio>>
+    of "egg-volume":
+      <<egg-volume>>
+    of "egg-query":
+      <<egg-query>>
     else:
       discard await redis_client.rpop(pendingkey)
 #+end_src
@@ -456,7 +474,15 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
                  of 23: CommandType.VOLUME
                  of 24: CommandType.CHARGER_CONFIG
                  of 25: CommandType.CONFIG_CHARGER
-                 of 31: CommandType.REBOOT
+                 of 26: CommandType.EGG_LOCK_ON
+                 of 27: CommandType.EGG_LOCK_OFF
+                 of 28: CommandType.EGG_PLAY
+                 of 29: CommandType.EGG_GPIO
+                 of 30: CommandType.EGG_FALLEN
+                 of 31: CommandType.EGG_VOLUME
+                 of 32: CommandType.EGG_TIMEOUT
+                 of 33: CommandType.EGG_QUERY
+                 of 63: CommandType.REBOOT
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   if len(taskstrs) == 0:
@@ -504,6 +530,18 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<config-network-confirm>>
     of CommandType.VOLUME:
       <<volume-confirm>>
+    of CommandType.EGG_LOCK_ON:
+      <<egg-lock-on-confirm>>
+    of CommandType.EGG_LOCK_OFF:
+      <<egg-lock-off-confirm>>
+    of CommandType.EGG_PLAY:
+      <<egg-play-confirm>>
+    of CommandType.EGG_GPIO:
+      <<egg-gpio-confirm>>
+    of CommandType.EGG_VOLUME:
+      <<egg-volume-confirm>>
+    of CommandType.EGG_QUERY:
+      <<egg-query-confirm>>
     of CommandType.REBOOT:
       <<reboot-confirm>>
     else:
@@ -772,7 +810,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<remove-task>>
 #+end_src
 * LOCK-DATA
-设备定时把锁控板的状态和测物条的状态上报给服务端，服务端把这些状态同步到缓存中。
+设备定时把锁控板的状态上报给服务端，服务端把这些状态同步到缓存中。
 ** 上行命令
 #+begin_src nim :noweb-ref lock-data
   let
@@ -1197,6 +1235,206 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     if task != nil and task["command"].getStr() == "config-network" and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
+* EGG-LOCK-ON
+** 下行命令
+#+begin_src nim :noweb-ref egg-lock-on
+  var cmd: ref Parameter = new(Parameter)
+  cmd.pin = cast[int16](task["pin"].getInt())
+  cmd.lock = cast[int8](task["cabin"].getInt())
+  cmd.board = cast[int8](task["egg"].getInt())
+  cmd.zone = 8 * 60 * 60 * 1000
+  cmd.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = cmd.encode_as(CommandType.EGG_LOCK_ON, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send EGG_LOCK_ON(egg: ", cmd.board, ", cabin: ", cmd.lock, ", pin: ", cast[uint16](cmd.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref egg-lock-on-confirm
+  info "Confirm cmd type is egg-lock-on, egg: ", param.board, ", cabin: ", param.lock
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "egg-lock-on" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
+* EGG-LOCK-OFF
+** 下行命令
+#+begin_src nim :noweb-ref egg-lock-off
+  var cmd: ref Parameter = new(Parameter)
+  cmd.pin = cast[int16](task["pin"].getInt())
+  cmd.lock = cast[int8](task["cabin"].getInt())
+  cmd.board = cast[int8](task["egg"].getInt())
+  cmd.zone = 8 * 60 * 60 * 1000
+  cmd.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = cmd.encode_as(CommandType.EGG_LOCK_OFF, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send EGG_LOCK_OFF(egg: ", cmd.board, ", cabin: ", cmd.lock, ", pin: ", cast[uint16](cmd.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref egg-lock-off-confirm
+  info "Confirm cmd type is egg-lock-off, egg: ", param.board, ", cabin: ", param.lock
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "egg-lock-off" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
+* EGG-PLAY
+** 下行命令
+#+begin_src nim :noweb-ref egg-play
+  var cmd: ref Parameter = new(Parameter)
+  cmd.pin = cast[int16](task["pin"].getInt())
+  cmd.audio = cast[int16](task["audio"].getInt())
+  cmd.board = cast[int8](task["egg"].getInt())
+  cmd.zone = 8 * 60 * 60 * 1000
+  cmd.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = cmd.encode_as(CommandType.EGG_PLAY, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send EGG_PLAY(egg: ", cmd.board, ", audio: ", cmd.audio, ", pin: ", cast[uint16](cmd.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref egg-play-confirm
+  info "Confirm cmd type is egg-play, egg: ", param.board, ", audio: ", param.audio
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "egg-play" and task["egg"].getInt() == param.board and task["audio"].getInt() == param.audio and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
+* EGG-GPIO
+** 下行命令
+#+begin_src nim :noweb-ref egg-gpio
+  var cmd: ref Parameter = new(Parameter)
+  cmd.pin = cast[int16](task["pin"].getInt())
+  cmd.gpio = cast[int8](task["gpio"].getInt())
+  cmd.board = cast[int8](task["egg"].getInt())
+  cmd.zone = 8 * 60 * 60 * 1000
+  cmd.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = cmd.encode_as(CommandType.EGG_GPIO, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send EGG_GPIO(egg: ", cmd.board, ", gpio: ", cmd.gpio, ", pin: ", cast[uint16](cmd.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref egg-gpio-confirm
+  info "Confirm cmd type is egg-gpio, egg: ", param.board, ", gpio: ", param.gpio
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "egg-gpio" and task["egg"].getInt() == param.board and task["gpio"].getInt() == param.gpio and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
+* EGG-FALLEN
+扭蛋机检测到落蛋事件后，上报给服务端。
+** 上行命令
+#+begin_src nim :noweb-ref egg-fallen
+  let
+    uid = data.uid
+    param = data.parameter
+    sn = param.sn
+    pin = param.pin
+    now = cast[int]((epochTime() * 1000).toInt() shr 10)
+    timestamp = cast[int](param.timestamp shr 10)
+    expires_in = if now >= timestamp: 3600 else: timestamp - now
+  <<save-connections>>
+
+  info "EGG-FALLEN, egg: ", param.board, ", cabin: ", param.lock
+  <<egg-fallen-confirm>>
+#+end_src
+** 下行响应
+#+begin_src nim :noweb-ref egg-fallen-confirm
+  var confirm: ref Parameter = new(Parameter)
+  confirm.sn = sn
+  confirm.pin = pin
+  confirm.version = 0
+  confirm.cmd_type = 30 # CommandType.EGG_FALLEN
+  confirm.zone = 8 * 60 * 60 * 1000
+  confirm.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = confirm.encode_as(CommandType.CONFIRM, uid)
+  discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
+  info "Prepare to send CONFIRM of EGG-FALLEN to ", box, " @ ", address, ":", saddr.sin_port
+#+end_src
+
+* EGG-VOLUME
+** 下行命令
+#+begin_src nim :noweb-ref egg-volume
+  var cmd: ref Parameter = new(Parameter)
+  cmd.pin = cast[int16](task["pin"].getInt())
+  cmd.volume = cast[int8](task["volume"].getInt())
+  cmd.board = cast[int8](task["egg"].getInt())
+  cmd.zone = 8 * 60 * 60 * 1000
+  cmd.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = cmd.encode_as(CommandType.EGG_VOLUME, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send EGG_VOLUME(egg: ", cmd.board, ", volume: ", cmd.volume, ", pin: ", cast[uint16](cmd.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref egg-volume-confirm
+  info "Confirm cmd type is egg-volume, egg: ", param.board, ", volume: ", param.volume
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "egg-volume" and task["egg"].getInt() == param.board and task["volume"].getInt() == param.volume and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
+* EGG-FALLEN
+扭蛋机检测到超时事件后，上报给服务端。
+** 上行命令
+#+begin_src nim :noweb-ref egg-timeout
+  let
+    uid = data.uid
+    param = data.parameter
+    sn = param.sn
+    pin = param.pin
+    now = cast[int]((epochTime() * 1000).toInt() shr 10)
+    timestamp = cast[int](param.timestamp shr 10)
+    expires_in = if now >= timestamp: 3600 else: timestamp - now
+  <<save-connections>>
+
+  info "EGG-FALLEN, egg: ", param.board, ", cabin: ", param.lock
+  <<egg-timeout-confirm>>
+#+end_src
+** 下行响应
+#+begin_src nim :noweb-ref egg-timeout-confirm
+  var confirm: ref Parameter = new(Parameter)
+  confirm.sn = sn
+  confirm.pin = pin
+  confirm.version = 0
+  confirm.cmd_type = 30 # CommandType.EGG_FALLEN
+  confirm.zone = 8 * 60 * 60 * 1000
+  confirm.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = confirm.encode_as(CommandType.CONFIRM, uid)
+  discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
+  info "Prepare to send CONFIRM of EGG-TIMEOUT to ", box, " @ ", address, ":", saddr.sin_port
+#+end_src
+
+* EGG-QUERY
+** 下行命令
+#+begin_src nim :noweb-ref egg-query
+  var cmd: ref Parameter = new(Parameter)
+  cmd.pin = cast[int16](task["pin"].getInt())
+  cmd.lock = cast[int8](task["cabin"].getInt())
+  cmd.board = cast[int8](task["egg"].getInt())
+  cmd.zone = 8 * 60 * 60 * 1000
+  cmd.timestamp = cast[int64]((epochTime() * 1000).toInt())
+  var pkt = cmd.encode_as(CommandType.EGG_QUERY, uid)
+  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
+  var saddr = dst
+  <<ntop>>
+  info "Prepare to send EGG_QUERY(egg: ", cmd.board, ", cabin: ", cmd.lock, ", pin: ", cast[uint16](cmd.pin), ") to ", box, " @ ", address, ":", dst.sin_port
+#+end_src
+** 上行响应
+#+begin_src nim :noweb-ref egg-query-confirm
+info "Confirm cmd type is egg-query, egg: ", param.board, ", cabin: ", param.lock
+  for taskstr in taskstrs:
+    let task = try: parseJson(taskstr) except: nil
+    if task != nil and task["command"].getStr() == "egg-query" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
+      <<remove-task>>
+#+end_src
 * REBOOT
 ** 下行命令
 #+begin_src nim :noweb-ref reboot
@@ -1222,7 +1460,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, VOLUME = 23, CHARGER_CONFIG = 24, CONFIG_CHARGER = 25, REBOOT = 31
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, VOLUME = 23, CHARGER_CONFIG = 24, CONFIG_CHARGER = 25, EGG_LOCK_ON = 26, EGG_LOCK_OFF = 27, EGG_PLAY = 28, EGG_GPIO = 29, EGG_FALLEN = 30, EGG_VOLUME = 31, EGG_TIMEOUT = 32, EGG_QUERY = 33, REBOOT = 63
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
@@ -1316,7 +1554,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       uid[i] = buf[offset + 1 + 1 + 1 + i]
     let unzipped: seq[byte] = unzeropack(buf, offset + header_size, length - header_size)
     let cmdtype = buf[offset + 1 + 1]
-    if cmdtype < 24 or cmdtype == 31:
+    if cmdtype < 34 or cmdtype == 63:
       result = PackResult(cmd_type: CommandType(cmdtype), uid: uid, parameter: parameter.decode_from(unzipped, 0))
     else:
       warn "Command type is invalid\n"
