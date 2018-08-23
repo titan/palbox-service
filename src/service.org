@@ -1253,7 +1253,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-lock-on-confirm
   info "Confirm cmd type is egg-lock-on, egg: ", param.board, ", cabin: ", param.lock
-  discard await redis_client.setEx("egg-lock-on-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
+  discard await redis_client.setEx("egg-lock-on-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-lock-on" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1277,7 +1277,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-lock-off-confirm
   info "Confirm cmd type is egg-lock-off, egg: ", param.board, ", cabin: ", param.lock
-  discard await redis_client.setEx("egg-lock-off-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
+  discard await redis_client.setEx("egg-lock-off-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
@@ -1302,7 +1302,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-play-confirm
   info "Confirm cmd type is egg-play, egg: ", param.board, ", audio: ", param.audio
-  discard await redis_client.setEx("egg-play-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
+  discard await redis_client.setEx("egg-play-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-play" and task["egg"].getInt() == param.board and task["audio"].getInt() == param.audio and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1326,7 +1326,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-gpio-confirm
   info "Confirm cmd type is egg-gpio, egg: ", param.board, ", gpio: ", param.gpio
-  discard await redis_client.setEx("egg-gpio-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
+  discard await redis_client.setEx("egg-gpio-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-gpio" and task["egg"].getInt() == param.board and task["gpio"].getInt() == param.gpio and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1381,7 +1381,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-volume-confirm
   info "Confirm cmd type is egg-volume, egg: ", param.board, ", volume: ", param.volume
-  discard await redis_client.setEx("egg-volume-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
+  discard await redis_client.setEx("egg-volume-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-volume" and task["egg"].getInt() == param.board and task["volume"].getInt() == param.volume and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1436,7 +1436,10 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-query-confirm
 info "Confirm cmd type is egg-query, egg: ", param.board, ", cabin: ", param.lock
-  discard await redis_client.setEx("egg-query-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
+  await redis_client.multi()
+  discard await redis_client.setEx("egg-query-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
+  discard await redis_client.setEx("egg-busy." & $uid & "." & $param.board & "." & $param.lock, 30, $param.busy)
+  discard await redis_client.exec()
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-query" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
