@@ -1253,6 +1253,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-lock-on-confirm
   info "Confirm cmd type is egg-lock-on, egg: ", param.board, ", cabin: ", param.lock
+  discard await redis_client.setEx("egg-lock-on-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-lock-on" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1276,6 +1277,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-lock-off-confirm
   info "Confirm cmd type is egg-lock-off, egg: ", param.board, ", cabin: ", param.lock
+  discard await redis_client.setEx("egg-lock-off-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
+  let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-lock-off" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1299,6 +1302,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-play-confirm
   info "Confirm cmd type is egg-play, egg: ", param.board, ", audio: ", param.audio
+  discard await redis_client.setEx("egg-play-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-play" and task["egg"].getInt() == param.board and task["audio"].getInt() == param.audio and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1322,6 +1326,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-gpio-confirm
   info "Confirm cmd type is egg-gpio, egg: ", param.board, ", gpio: ", param.gpio
+  discard await redis_client.setEx("egg-gpio-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-gpio" and task["egg"].getInt() == param.board and task["gpio"].getInt() == param.gpio and cast[int16](task["pin"].getInt()) == param.pin:
@@ -1376,12 +1381,13 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-volume-confirm
   info "Confirm cmd type is egg-volume, egg: ", param.board, ", volume: ", param.volume
+  discard await redis_client.setEx("egg-volume-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-volume" and task["egg"].getInt() == param.board and task["volume"].getInt() == param.volume and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
-* EGG-FALLEN
+* EGG-TIMETOU
 扭蛋机检测到超时事件后，上报给服务端。
 ** 上行命令
 #+begin_src nim :noweb-ref egg-timeout
@@ -1395,7 +1401,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     expires_in = if now >= timestamp: 3600 else: timestamp - now
   <<save-connections>>
 
-  info "EGG-FALLEN, egg: ", param.board, ", cabin: ", param.lock
+  info "EGG-TIMETOU, egg: ", param.board, ", cabin: ", param.lock
   <<egg-timeout-confirm>>
 #+end_src
 ** 下行响应
@@ -1404,7 +1410,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   confirm.sn = sn
   confirm.pin = pin
   confirm.version = 0
-  confirm.cmd_type = 30 # CommandType.EGG_FALLEN
+  confirm.cmd_type = 32 # CommandType.EGG_TIMETOUT
   confirm.zone = 8 * 60 * 60 * 1000
   confirm.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = confirm.encode_as(CommandType.CONFIRM, uid)
@@ -1430,6 +1436,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref egg-query-confirm
 info "Confirm cmd type is egg-query, egg: ", param.board, ", cabin: ", param.lock
+  discard await redis_client.setEx("egg-query-ack." & $uid & "." & $param.pin, 10, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "egg-query" and task["egg"].getInt() == param.board and task["cabin"].getInt() == param.lock and cast[int16](task["pin"].getInt()) == param.pin:
