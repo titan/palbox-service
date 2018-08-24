@@ -677,6 +677,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref lock-off-confirm
   info "Confirm cmd type is LOCK_OFF, board: ", param.board, ", lock: ", param.lock
+  if param.pin != 0:
+    discard await redis_client.setEx("lock-off-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "lock-off" and cast[int8](task["board"].getInt()) == param.board and cast[int8](task["lock"].getInt()) == param.lock:
@@ -688,6 +690,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   var locks_off: ref Parameter = new(Parameter)
   locks_off.board = cast[int8](task["board"].getInt())
   locks_off.locks = task["locks"].getElems().mapIt(cast[int8](it.getInt()))
+  locks_off.pin = cast[int16](task["pin"].getInt())
   locks_off.pins = task["pins"].getElems().mapIt(cast[int16](it.getInt()))
   locks_off.zone = 8 * 60 * 60 * 1000
   locks_off.timestamp = cast[int64]((epochTime() * 1000).toInt())
@@ -700,6 +703,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 ** 上行响应
 #+begin_src nim :noweb-ref locks-off-confirm
   info "Confirm cmd type is LOCKS_OFF, board: ", param.board, ", locks: ", param.locks.mapIt($it).join(",")
+  if param.pin != 0:
+    discard await redis_client.setEx("locks-off-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
   let locks = param.locks.foldl(a * b, 1)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
