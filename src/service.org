@@ -705,12 +705,12 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
   info "Confirm cmd type is LOCKS_OFF, board: ", param.board, ", locks: ", param.locks.mapIt($it).join(",")
   if param.pin != 0:
     discard await redis_client.setEx("locks-off-ack." & $uid & "." & $param.pin, 30, $param.timestamp)
-  let locks = param.locks.foldl(a * b, 1)
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "locks-off" and cast[int8](task["board"].getInt()) == param.board:
-      let lockstmp = task["locks"].getElems().foldl(a * b.getInt(), 1'i64)
-      if locks == lockstmp:
+      if len(param.pins) > 0 and param.pins[0] == cast[int16](task["pins"][0].getInt()):
+        <<remove-task>>
+      elif param.pin != 0 and param.pin == cast[int16](task["pins"][0].getInt()):
         <<remove-task>>
 #+end_src
 * LOCK-STATUS
@@ -729,15 +729,14 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+end_src
 ** 上行响应
 #+begin_src nim :noweb-ref lock-status-confirm
-  info "Confirm cmd type is LOCK_STATUS, board: ", param.board, ", state0: ", param.states[0].toHex(), ", state1: ", param.states[1].toHex(), ", state2: ", param.states[2].toHex()
+  let locksystem = await redis_client.get("locksystem." & $uid)
+  info "Confirm cmd type is LOCK_STATUS ", locksystem, ", board: ", param.board, ", state0: ", param.states[0].toHex(), ", state1: ", param.states[1].toHex(), ", state2: ", param.states[2].toHex()
+  await redis_client.multi()
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
-    for j in 0..7:
-      var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
-      if ((1 shl j) and state) != 0:
-        discard await redis_client.setEx(skey, 5, "1")
-      else:
-        discard await redis_client.setEx(skey, 5, "0")
+    var skey = "lock-status." & $uid & "." & $param.board & "." & $i
+    discard await redis_client.setEx(skey, 5, $state)
+  discard await redis_client.exec()
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
     if task != nil and task["command"].getStr() == "lock-status" and cast[int8](task["board"].getInt()) == param.board and cast[int16](task["pin"].getInt()) == param.pin:
@@ -826,17 +825,16 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     now = cast[int]((epochTime() * 1000).toInt() shr 10)
     timestamp = cast[int](param.timestamp shr 10)
     expires_in = if now >= timestamp: 3600 else: timestamp - now
+    locksystem = await redis_client.get("locksystem." & $uid)
   <<save-connections>>
 
-  info "LOCK-DATA, board: ", param.board, ", status: ", cast[uint8](param.states[0]), ", ", cast[uint8](param.states[1]), ", ", cast[uint8](param.states[2])
+  info "LOCK-DATA, ", locksystem, " board: ", param.board, ", status: ", cast[uint8](param.states[0]), ", ", cast[uint8](param.states[1]), ", ", cast[uint8](param.states[2])
+  await redis_client.multi()
   for i in 0..len(param.states) - 1:
     var state = param.states[i]
-    for j in 0..7:
-      var skey = "lock-status." & $uid & "." & $param.board & "." & $((len(param.states) - 1 - i) * 8 + j + 1)
-      if ((1 shl j) and state) != 0:
-        discard await redis_client.setEx(skey, expires_in, "1")
-      else:
-        discard await redis_client.setEx(skey, expires_in, "0")
+    var skey = "lock-status." & $uid & "." & $param.board & "." & $i
+    discard await redis_client.setEx(skey, expires_in, $state)
+  discard await redis_client.exec()
   <<lock-data-confirm>>
 #+end_src
 ** 下行响应
@@ -1582,11 +1580,45 @@ info "Confirm cmd type is egg-query, egg: ", param.board, ", cabin: ", param.loc
 可以根据此地址，主动给设备发送数据。同时把设备的地址加入到当前活跃设备
 集合中。每个连接至少可以维持 60 秒。
 
+首次连接时，可以把固件的版本信息按设备配置拆解后，保存到缓存中。如果是
+不支持版本信息的老固件，则默认锁控为 DGZL，其它信息不设置。
+
 #+begin_src nim :noweb-ref save-connections
   if device_connections.has_key(uid):
     let pair = device_connections[uid]
     device_connections[uid] = (name: pair[0], expires_at: epochTime().toInt() + 60, sockaddr: saddr)
   else:
+    let fireware = data.parameter.fireware_version
+    info "fireware is ", fireware
+    if fireware != 0:
+      let
+        main_version = cast[uint8](fireware and 0xFF)
+        sub_version = cast[uint8]((fireware shr 8) and 0xFF)
+        network = cast[uint8]((fireware shr 16) and 0x0F)
+        locksystem = cast[uint8]((fireware shr 20) and 0x0F)
+      await redis_client.multi()
+      case network:
+        of 1:
+          await redis_client.setk("network." & $uid, "SIM800")
+        of 2:
+          await redis_client.setk("network." & $uid, "ESP8266")
+        of 4:
+          await redis_client.setk("network." & $uid, "EC20")
+        else:
+          discard
+      case locksystem:
+        of 1:
+          await redis_client.setk("locksystem." & $uid, "DGZL")
+        of 2:
+          await redis_client.setk("locksystem." & $uid, "FC")
+        else:
+          discard
+      discard await redis_client.exec()
+    else:
+      await redis_client.multi()
+      discard await redis_client.del(@["network." & $uid])
+      await redis_client.setk("locksystem." & $uid, "DGZL")
+      discard await redis_client.exec()
     let name = await redis_client.hget("boxes", $uid)
     device_connections[uid] = (name: if name == redisNil: $uid else: $uid & "(" & name & ")", expires_at: epochTime().toInt() + 60, sockaddr: saddr)
   let
