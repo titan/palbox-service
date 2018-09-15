@@ -5,7 +5,7 @@ box service 给设备发送命令。服务采用异步方式编写，启动后�
 收到的请求，并把响应返回给请求的设备；或者把任务数据下发给设备。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
-  import asyncdispatch, asyncnet, base64, httpclient, json, logging, md5, nativesockets, posix, redis, ringbuffer, sequtils, strfmt, strutils, tables, times
+  import asyncdispatch, asyncnet, base64, json, logging, md5, nativesockets, posix, redis, ringbuffer, sequtils, strfmt, strutils, tables, times
   import box_servicepkg/box_packer, box_servicepkg/parameter
 
   <<hexdump>>
@@ -157,7 +157,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 3. 若 receive 流程收到任务的响应，则去循环队列中查找并删除任务。
 
 要注意，check task 流程在检查循环队列时，要休眠恰当的时间（比如按队列
-长度来计算休眠时间），以保证每个任务大概 3 秒钟可以重发一次。
+长度来计算休眠时间），以保证每个任务大概 2 秒钟可以重发一次。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc check_always() {.async.} =
@@ -262,7 +262,7 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     let
       redis_pendinglen = await redis_client.llen(pendingkey)
       pendinglen = cast[int](redis_pendinglen)
-      interval = int(3000 / (if pendinglen == 0: 1 else: pendinglen))
+      interval = int(2000 / (if pendinglen == 0: 1 else: pendinglen))
     if now_in_ms - sending_time[uid] < interval: # Don't resend in interval microseconds
       continue
   sending_time[uid] = now_in_ms
@@ -600,63 +600,8 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
     while pin_table[uid].add((pin: pin, expire_in: cast[int64](timestamp + 6))) == 0:
       discard pin_table[uid].pop()
     info "Add pin of LOCK_OFF to ringbuffer"
-    let
-      bsclient = newAsyncHttpClient()
-      card_no_str = card_no.format("-010")
-      params = if lock == 0 and door == 0: "mb=" & $uid & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str elif lock == 0: "mb=" & $uid & "&sno=" & $door & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str else: "mb=" & $uid & "&sno=" & $lock & "&sw=" & $reader & "&t=" & $timestamp & "&u=" & card_no_str
-      path = if lock == 0 and door == 0: "swing/back" else: "swing/orsark"
-      sign = toLowerAscii($toMD5(params & "&key=qbtstvvs05pyiwjj50uuddydho2srdlm"))
-    bsclient.headers = newHttpHeaders({ "Content-Type": "application/x-www-form-urlencoded" })
-    info "https://book.fengchaohuzhu.com/" & path
-    let response = await bsclient.post("https://book.fengchaohuzhu.com/" & path, body = params & "&sign=" & sign)
-    info params & "&sign=" & sign
-    bsclient.close()
-    info "Business system response status ", response.status
-    if response.status == "200 OK":
-      let body = await response.body()
-      let resp = try: parseJson(body) except: nil
-      if resp != nil:
-        info "Business system response ", $resp
-        let
-          tkey = "tasks." & $uid
-          audio = if lock == 0:
-                    case resp["code"].getInt():
-                      of 1: 10
-                      of -318: 12
-                      of -350: 12
-                      of -208: 7
-                      of -138: 8
-                      of -83: 13
-                      of -339: 13
-                      of -340: 13
-                      of -1: 13
-                      of -79: 13
-                      of -80: 14
-                      else: 0
-                  else:
-                    case resp["code"].getInt():
-                      of 1: 4
-                      of -341: 5
-                      of -137: 6
-                      of -208: 7
-                      of -135: 8
-                      of -142: 9
-                      of -83: 13
-                      of -1: 13
-                      of -4: 13
-                      of -79: 6
-                      of -80: 13
-                      of -339: 13
-                      of -340: 13
-                      else: 0
-        if audio != 0:
-          let json = %*{"command": "play", "speaker": reader, "audio": audio, "pin": pin, "expires-at": epochTime().toInt() + 10, "pin": pin, "status": "queued", "occurred-at": getDateStr() & " " & getClockStr()}
-
-          await redis_client.multi()
-          discard await redis_client.rpush(key = tkey, value = $json)
-          discard await redis_client.expire(key = tkey, seconds = 86400)
-          discard await redis_client.rpush(key = "tasklog." & $uid & "." & getDateStr(), value = $json)
-          discard await redis_client.exec()
+    let taskjson = %*{"command": "card-lock-off", "uid": $uid, "card-no": cast[int](card_no), "reader": reader, "lock": lock, "door": door}
+    asyncCheck redis_client.lpush("business-task-queue", $taskjson)
 #+end_src
 
 * LOCK-OFF
