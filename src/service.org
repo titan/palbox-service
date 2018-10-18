@@ -356,6 +356,12 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<egg-volume>>
     of "egg-query":
       <<egg-query>>
+    of "rfid-reader-inventory":
+      <<rfid-reader-inventory>>
+    of "rfid-reader-difference":
+      <<rfid-reader-difference>>
+    of "rfid-reader-data":
+      <<rfid-reader-data>>
     else:
       discard await redis_client.rpop(pendingkey)
 #+end_src
