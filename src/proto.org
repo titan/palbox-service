@@ -86,7 +86,9 @@
     (byte 37 scope) ;; RFID 数据范围
     (int 38 offset) ;; 偏移量
     (int 39 num) ;; 数量，长度等
-    (byte* 40 data) ;; 数据区
+    (int 40 increment) ;; 增量
+    (int 41 decrement) ;; 减量
+    (byte* 42 data) ;; 数据区
     )
 
 #+end_src

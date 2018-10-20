@@ -1566,12 +1566,12 @@ RFID-READER 将求差集后的结果上报给服务端。
     expires_in = if now >= timestamp: 3600 else: timestamp - now
   <<save-connections>>
 
-  info "RFID-READER-DIFFERENCE-RESULT, board: ", param.board, ", door: ", param.lock, ", num: ", param.num
+  info "RFID-READER-DIFFERENCE-RESULT, board: ", param.board, ", door: ", param.lock, ", increment: ", param.increment, ", decrement: ", param.decrement
   let current = epochTime().toInt()
   if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
     info "Found dup command RFID-READER-DIFFERENCE-RESULT from board", param.board, " at ", uid
   else:
-    info "A new fresh RFID-READER-DIFFERENCE-RESULT(board: ", param.board, ", door: ", param.lock, ", num: ", param.num, ") from ", uid
+    info "A new fresh RFID-READER-DIFFERENCE-RESULT(board: ", param.board, ", door: ", param.lock, ", increment: ", param.increment, ", decrement: ", param.decrement, ") from ", uid
     if not pin_table.contains(uid):
       pin_table[uid] = newRingBuffer[PinPair](bitsize = 3)
     else:
@@ -1579,7 +1579,7 @@ RFID-READER 将求差集后的结果上报给服务端。
         discard pin_table[uid].pop()
     while pin_table[uid].add((pin: pin, expire_in: cast[int64](current + 6))) == 0:
       discard pin_table[uid].pop()
-    let taskjson = %*{"command": "rfid-reader-difference-result", "uid": $uid, "board": param.board, "door": param.lock, "num": param.num}
+    let taskjson = %*{"command": "rfid-reader-difference-result", "uid": $uid, "board": param.board, "door": param.lock, "increment": param.increment, "decrement": param.decrement}
     asyncCheck redis_client.lpush("business-task-queue", $taskjson)
   <<rfid-reader-difference-result-confirm>>
 #+end_src
