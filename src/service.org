@@ -1474,7 +1474,13 @@ info "Confirm cmd type is rfid-reader-difference, board: ", param.board, ", door
   var cmd: ref Parameter = new(Parameter)
   cmd.pin = cast[int16](task["pin"].getInt())
   cmd.board = cast[int8](task["board"].getInt())
-  cmd.scope = cast[int8](task["scope"].getInt())
+  cmd.scope = case task["scope"].getStr():
+                of "increment":
+                  1
+                of "decrement":
+                  2
+                else:
+                  0x7F
   cmd.offset = cast[int32](task["offset"].getInt())
   cmd.num = cast[int32](task["num"].getInt())
   cmd.zone = 8 * 60 * 60 * 1000
@@ -1488,23 +1494,28 @@ info "Confirm cmd type is rfid-reader-difference, board: ", param.board, ", door
 ** 上行响应
 #+begin_src nim :noweb-ref rfid-reader-data-confirm
   info "Confirm cmd type is rfid-reader-data, board: ", param.board, ", scope: ", param.scope, ", offset: ", param.offset, ", num: ", param.num, ", pin: ", param.pin
-  let scope = case param.scope:
-                of 1:
-                  "inventory"
-                of 2:
-                  "difference"
-                else:
-                  "all"
+  let
+    scope = case param.scope:
+              of 1:
+                "increment"
+              of 2:
+                "decrement"
+              else:
+                "all"
+    key = "rfid-reader-data." & $uid & "." & $param.board & "." & scope & "." & $param.offset & "." & $param.pin
   await redis_client.multi()
   discard await redis_client.setEx("rfid-reader-data-ack." & $uid & "." & $cast[uint16](param.pin), 30, $param.timestamp)
-  for i in 0..cast[int](len(param.data)/6):
-    let val = param.data[i].toHex() & param.data[i + 1].toHex() & param.data[i + 2].toHex() & param.data[i + 3].toHex() & param.data[i + 4].toHex() & param.data[i + 5].toHex()
-    discard await redis_client.lpush("rfid-reader-data." & $uid & "." & scope & "." & $param.offset & "." & $param.num, val)
-  discard await redis_client.expire("rfid-reader-data." & $uid & "." & scope & "." & $param.offset & "." & $param.num, 300)
+  if len(param.data) > 0:
+    for i in 0..toInt(len(param.data)/6) - 1:
+      let
+        pos = i * 6
+        val = param.data[pos].toHex() & param.data[pos + 1].toHex() & param.data[pos + 2].toHex() & param.data[pos + 3].toHex() & param.data[pos + 4].toHex() & param.data[pos + 5].toHex()
+      discard await redis_client.sadd(key, val)
+    discard await redis_client.expire(key, 300)
   discard await redis_client.exec()
   for taskstr in taskstrs:
     let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "rfid-reader-data" and task["board"].getInt() == param.board and task["scope"].getInt() == param.scope and task["offset"].getInt() == param.offset and task["num"].getInt() == param.num and cast[int16](task["pin"].getInt()) == param.pin:
+    if task != nil and task["command"].getStr() == "rfid-reader-data" and task["board"].getInt() == param.board and task["scope"].getStr() == scope and task["offset"].getInt() == param.offset and cast[int16](task["pin"].getInt()) == param.pin:
       <<remove-task>>
 #+end_src
 * RFID-READER-INVENTORY-RESULT
