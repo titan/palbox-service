@@ -129,12 +129,9 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
           of CommandType.EGG_TIMEOUT:
             info "Receive EGG_TIMEOUT from ", box, " @ ", address, ":", saddr.sin_port
             <<egg-timeout>>
-          of CommandType.RFID_READER_INVENTORY_RESULT:
-            info "Receive RFID_READER_INVENTORY_RESULT from ", box, " @ ", address, ":", saddr.sin_port
-            <<rfid-reader-inventory-result>>
-          of CommandType.RFID_READER_DIFFERENCE_RESULT:
-            info "Receive RFID_READER_DIFFERENCE_RESULT from ", box, " @ ", address, ":", saddr.sin_port
-            <<rfid-reader-difference-result>>
+          of CommandType.RFID_READER_DATA:
+            info "Receive RFID_READER_DATA from ", box, " @ ", address, ":", saddr.sin_port
+            <<rfid-reader-data>>
           else:
             info "Receive UNKNOWN from ", box, " @ ", address, ":", saddr.sin_port
       else:
@@ -360,8 +357,6 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<rfid-reader-inventory>>
     of "rfid-reader-difference":
       <<rfid-reader-difference>>
-    of "rfid-reader-data":
-      <<rfid-reader-data>>
     else:
       discard await redis_client.rpop(pendingkey)
 #+end_src
@@ -374,11 +369,11 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc serve() =
     var
-      name = prepareAddress(INADDR_ANY, 5008)
+      name = prepareAddress(INADDR_ANY, 50008)
       sock = newAsyncNativeSocket(domain = Domain.AF_INET, sockType = SockType.SOCK_DGRAM, protocol = Protocol.IPPROTO_UDP)
 
     discard bindAddr(sock.SocketHandle, cast[ptr SockAddr](name), sizeof(Sockaddr_in).Socklen)
-    info "Server bound to port 5008"
+    info "Server bound to port 50008"
 
     asyncCheck receive_always(sock)
     asyncCheck send_always(sock)
@@ -498,8 +493,6 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
                  of 34: CommandType.RFID_READER_INVENTORY
                  of 35: CommandType.RFID_READER_DIFFERENCE
                  of 36: CommandType.RFID_READER_DATA
-                 of 37: CommandType.RFID_READER_INVENTORY_RESULT
-                 of 38: CommandType.RFID_READER_DIFFERENCE_RESULT
                  of 63: CommandType.REBOOT
                  else: CommandType.UNKNOWN
   let taskstrs: seq[string] = await redis_client.lrange(taskkey, 0, -1)
@@ -564,8 +557,6 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
       <<rfid-reader-inventory-confirm>>
     of CommandType.RFID_READER_DIFFERENCE:
       <<rfid-reader-difference-confirm>>
-    of CommandType.RFID_READER_DATA:
-      <<rfid-reader-data-confirm>>
     of CommandType.REBOOT:
       <<reboot-confirm>>
     else:
@@ -1469,143 +1460,93 @@ info "Confirm cmd type is rfid-reader-difference, board: ", param.board, ", door
       <<remove-task>>
 #+end_src
 * RFID-READER-DATA
-** 下行命令
+RFID-READER-DATA 命令多批次上传数据到服务端。当服务端收到完整数据后，推送给业务系统。
+
+| scope | meaning   |
+|-------+-----------|
+|     1 | increment |
+|     2 | decrement |
+|  0x7f | all       |
+
+** 上行命令
 #+begin_src nim :noweb-ref rfid-reader-data
-  var cmd: ref Parameter = new(Parameter)
-  cmd.pin = cast[int16](task["pin"].getInt())
-  cmd.board = cast[int8](task["board"].getInt())
-  cmd.scope = case task["scope"].getStr():
-                of "increment":
-                  1
-                of "decrement":
-                  2
+  let
+    uid = data.uid
+    param = data.parameter
+    sn = param.sn
+    pin = param.pin
+    now = cast[int]((epochTime() * 1000).toInt() shr 10)
+    timestamp = cast[int](param.timestamp shr 10)
+    expires_in = if now >= timestamp: 3600 else: timestamp - now
+  <<save-connections>>
+
+  info "RFID-READER-DATA, board: ", param.board, ", door: ", param.lock, ", scope: ", if param.scope == 1: "increment" elif param.scope == 2: "decrement" else: "all", ", num: ", param.num, ", increment: ", param.increment, ", decrement: ", param.decrement, ", pin: ", cast[uint16](param.pin), ", real-pin: ", cast[uint16](param.pins[0]), ", data-len: ", len(param.data)
+  let current = epochTime().toInt()
+  if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
+    info "Found dup command RFID-READER-DATA from board ", param.board, " with pin ", cast[uint16](pin), " and real-pin ", cast[uint16](param.pins[0]), " at ", uid
+  else:
+    info "A new fresh RFID-READER-DATA(board: ", param.board, ", door: ", param.lock, ", scope: ", if param.scope == 1: "increment" elif param.scope == 2: "decrement" else: "all", ", num: ", param.num, ", increment: ", param.increment, ", decrement: ", param.decrement, ", data-len: ", len(param.data), ", pin: ", cast[uint16](pin), ", real-pin: ", cast[uint16](param.pins[0]), ") from ", uid
+    if not pin_table.contains(uid):
+      pin_table[uid] = newRingBuffer[PinPair](bitsize = 3)
+    else:
+      while len(pin_table[uid]) > 0 and pin_table[uid][0][1] < current:
+        discard pin_table[uid].pop()
+    while pin_table[uid].add((pin: pin, expire_in: cast[int64](current + 6))) == 0:
+      discard pin_table[uid].pop()
+    await redis_client.multi()
+    let
+      basekey = "rfid-reader-data." & $uid & "." & $param.board & "."  & $param.door & "." & $param.pins[0]
+      datakey = if param.scope == 1:
+                  basekey & ".increment"
+                elif param.scope == 2:
+                  basekey & ".decrement"
                 else:
-                  0x7F
-  cmd.offset = cast[int32](task["offset"].getInt())
-  cmd.num = cast[int32](task["num"].getInt())
-  cmd.zone = 8 * 60 * 60 * 1000
-  cmd.timestamp = cast[int64]((epochTime() * 1000).toInt())
-  var pkt = cmd.encode_as(CommandType.RFID_READER_DATA, uid)
-  discard task_buffer.add((uid: uid, sockaddr: dst, data: pkt))
-  var saddr = dst
-  <<ntop>>
-  info "Prepare to send RFID-READER-DATA(board: ", cmd.board, ", scope: ", cmd.scope, ", offset: ", cmd.offset, ", num: ", cmd.num, ", pin: ", cast[uint16](cmd.pin), ") to ", box, " @ ", address, ":", dst.sin_port
-#+end_src
-** 上行响应
-#+begin_src nim :noweb-ref rfid-reader-data-confirm
-  info "Confirm cmd type is rfid-reader-data, board: ", param.board, ", scope: ", param.scope, ", offset: ", param.offset, ", num: ", param.num, ", pin: ", param.pin
-  let
-    scope = case param.scope:
-              of 1:
-                "increment"
-              of 2:
-                "decrement"
-              else:
-                "all"
-    key = "rfid-reader-data." & $uid & "." & $param.board & "." & scope & "." & $param.offset & "." & $param.pin
-  await redis_client.multi()
-  discard await redis_client.setEx("rfid-reader-data-ack." & $uid & "." & $cast[uint16](param.pin), 30, $param.timestamp)
-  if len(param.data) > 0:
-    for i in 0..toInt(len(param.data)/6) - 1:
+                  basekey
+    if len(param.data) > 0:
+      for i in 0..toInt((len(param.data) / 6)) - 1:
+        let idx = i * 6
+        discard await redis_client.sadd(datakey, toHex(param.data[idx]) & ':' & toHex(param.data[idx + 1]) & ':' & toHex(param.data[idx + 2]) & ':' & toHex(param.data[idx + 3]) & ':' & toHex(param.data[idx + 4]) & ':' & toHex(param.data[idx + 5]))
+      discard await redis_client.expire(datakey, 600)
+    discard await redis_client.exec()
+    if param.scope == 1 or param.scope == 2:
       let
-        pos = i * 6
-        val = param.data[pos].toHex() & param.data[pos + 1].toHex() & param.data[pos + 2].toHex() & param.data[pos + 3].toHex() & param.data[pos + 4].toHex() & param.data[pos + 5].toHex()
-      discard await redis_client.sadd(key, val)
-    discard await redis_client.expire(key, 300)
-  discard await redis_client.exec()
-  for taskstr in taskstrs:
-    let task = try: parseJson(taskstr) except: nil
-    if task != nil and task["command"].getStr() == "rfid-reader-data" and task["board"].getInt() == param.board and task["scope"].getStr() == scope and task["offset"].getInt() == param.offset and cast[int16](task["pin"].getInt()) == param.pin:
-      <<remove-task>>
-#+end_src
-* RFID-READER-INVENTORY-RESULT
-RFID-READER 将盘点后的结果上报给服务端。
-** 上行命令
-#+begin_src nim :noweb-ref rfid-reader-inventory-result
-  let
-    uid = data.uid
-    param = data.parameter
-    sn = param.sn
-    pin = param.pin
-    now = cast[int]((epochTime() * 1000).toInt() shr 10)
-    timestamp = cast[int](param.timestamp shr 10)
-    expires_in = if now >= timestamp: 3600 else: timestamp - now
-  <<save-connections>>
-
-  info "RFID-READER-INVENTORY-RESULT, board: ", param.board, ", door: ", param.lock, ", num: ", param.num
-  let current = epochTime().toInt()
-  if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
-    info "Found dup command RFID-READER-INVENTORY-RESULT from board", param.board, " at ", uid
-  else:
-    info "A new fresh RFID-READER-INVENTORY-RESULT(board: ", param.board, ", door: ", param.lock, ", num: ", param.num, ") from ", uid
-    if not pin_table.contains(uid):
-      pin_table[uid] = newRingBuffer[PinPair](bitsize = 3)
+        inckey = basekey & ".increment"
+        deckey = basekey & ".decrement"
+        inclen = await redis_client.scard(inckey)
+        declen = await redis_client.scard(deckey)
+      if inclen + declen == param.increment + param.decrement:
+        let
+          incrementtags = await redis_client.smembers(basekey & ".increment")
+          decrementtags = await redis_client.smembers(basekey & ".decrement")
+          taskjson = %*{"command": "rfid-reader-difference", "uid": $uid, "board": param.board, "door": param.lock, "increment": incrementtags, "decrement": decrementtags}
+        await redis_client.multi()
+        discard await redis_client.del(@[inckey, deckey])
+        discard await redis_client.lpush("business-task-queue", $taskjson)
+        discard await redis_client.exec()
     else:
-      while len(pin_table[uid]) > 0 and pin_table[uid][0][1] < current:
-        discard pin_table[uid].pop()
-    while pin_table[uid].add((pin: pin, expire_in: cast[int64](current + 6))) == 0:
-      discard pin_table[uid].pop()
-    let taskjson = %*{"command": "rfid-reader-inventory-result", "uid": $uid, "board": param.board, "door": param.lock, "num": param.num}
-    asyncCheck redis_client.lpush("business-task-queue", $taskjson)
-  <<rfid-reader-inventory-result-confirm>>
+      let datalen = await redis_client.scard(datakey)
+      if datalen == param.num:
+        let
+          tags = await redis_client.smembers(datakey)
+          taskjson = %*{"command": "rfid-reader-inventory", "uid": $uid, "board": param.board, "door": param.lock, "tags": tags}
+        await redis_client.multi()
+        discard await redis_client.del(@[datakey])
+        discard await redis_client.lpush("business-task-queue", $taskjson)
+        discard await redis_client.exec()
+  <<rfid-reader-data-confirm>>
 #+end_src
 ** 下行响应
-#+begin_src nim :noweb-ref rfid-reader-inventory-result-confirm
+#+begin_src nim :noweb-ref rfid-reader-data-confirm
   var confirm: ref Parameter = new(Parameter)
   confirm.sn = sn
   confirm.pin = pin
   confirm.version = 0
-  confirm.cmd_type = 37 # CommandType.RFID_READER_INVENTORY_RESULT
+  confirm.cmd_type = 36 # CommandType.RFID_READER_DATA
   confirm.zone = 8 * 60 * 60 * 1000
   confirm.timestamp = cast[int64]((epochTime() * 1000).toInt())
   var pkt = confirm.encode_as(CommandType.CONFIRM, uid)
   discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
-  info "Prepare to send CONFIRM of RFID-READER-INVENTORY-RESULT to ", box, " @ ", address, ":", saddr.sin_port
-#+end_src
-
-* RFID-READER-DIFFERENCE-RESULT
-RFID-READER 将求差集后的结果上报给服务端。
-** 上行命令
-#+begin_src nim :noweb-ref rfid-reader-difference-result
-  let
-    uid = data.uid
-    param = data.parameter
-    sn = param.sn
-    pin = param.pin
-    now = cast[int]((epochTime() * 1000).toInt() shr 10)
-    timestamp = cast[int](param.timestamp shr 10)
-    expires_in = if now >= timestamp: 3600 else: timestamp - now
-  <<save-connections>>
-
-  info "RFID-READER-DIFFERENCE-RESULT, board: ", param.board, ", door: ", param.lock, ", increment: ", param.increment, ", decrement: ", param.decrement
-  let current = epochTime().toInt()
-  if pin_table.contains(uid) and (pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin) != -1 and pin_table[uid][pin_table[uid].find((pin: pin, expire_in: 0'i64)) do (a, b: PinPair) -> bool: a.pin == b.pin].expire_in > timestamp:
-    info "Found dup command RFID-READER-DIFFERENCE-RESULT from board", param.board, " at ", uid
-  else:
-    info "A new fresh RFID-READER-DIFFERENCE-RESULT(board: ", param.board, ", door: ", param.lock, ", increment: ", param.increment, ", decrement: ", param.decrement, ") from ", uid
-    if not pin_table.contains(uid):
-      pin_table[uid] = newRingBuffer[PinPair](bitsize = 3)
-    else:
-      while len(pin_table[uid]) > 0 and pin_table[uid][0][1] < current:
-        discard pin_table[uid].pop()
-    while pin_table[uid].add((pin: pin, expire_in: cast[int64](current + 6))) == 0:
-      discard pin_table[uid].pop()
-    let taskjson = %*{"command": "rfid-reader-difference-result", "uid": $uid, "board": param.board, "door": param.lock, "increment": param.increment, "decrement": param.decrement}
-    asyncCheck redis_client.lpush("business-task-queue", $taskjson)
-  <<rfid-reader-difference-result-confirm>>
-#+end_src
-** 下行响应
-#+begin_src nim :noweb-ref rfid-reader-difference-result-confirm
-  var confirm: ref Parameter = new(Parameter)
-  confirm.sn = sn
-  confirm.pin = pin
-  confirm.version = 0
-  confirm.cmd_type = 38 # CommandType.RFID_READER_DIFFERENCE_RESULT
-  confirm.zone = 8 * 60 * 60 * 1000
-  confirm.timestamp = cast[int64]((epochTime() * 1000).toInt())
-  var pkt = confirm.encode_as(CommandType.CONFIRM, uid)
-  discard task_buffer.add((uid: uid, sockaddr: saddr, data: pkt))
-  info "Prepare to send CONFIRM of RFID-READER-DIFFERENCE-RESULT to ", box, " @ ", address, ":", saddr.sin_port
+  info "Prepare to send CONFIRM of RFID-READER-DATA to ", box, " @ ", address, ":", saddr.sin_port, " with pin ", cast[uint16](pin)
 #+end_src
 
 * REBOOT
@@ -1633,7 +1574,7 @@ RFID-READER 将求差集后的结果上报给服务端。
   import hashes, logging, sequtils, strutils
   type
     CommandType* {.pure.} = enum
-      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, VOLUME = 23, CHARGER_CONFIG = 24, CONFIG_CHARGER = 25, EGG_LOCK_ON = 26, EGG_LOCK_OFF = 27, EGG_PLAY = 28, EGG_GPIO = 29, EGG_FALLEN = 30, EGG_VOLUME = 31, EGG_TIMEOUT = 32, EGG_QUERY = 33, RFID_READER_INVENTORY = 34, RFID_READER_DIFFERENCE = 35, RFID_READER_DATA = 36, RFID_READER_INVENTORY_RESULT = 37, RFID_READER_DIFFERENCE_RESULT = 38, REBOOT = 63
+      UNKNOWN = 0, PING = 1, PONG = 2, CONFIRM = 3, LOCK_OFF = 4, LOCKS_OFF = 5, LOCK_STATUS = 6, LOCK_DETECT = 7, LOCK_STATUS_DETECT = 8, CHARGER_STATUS = 9, LIGHT_ON = 10, LIGHT_OFF = 11, FAN_ON = 12, FAN_OFF = 13, ULTRAVIOLET_ON = 14, ULTRAVIOLET_OFF = 15, CAMERA_ON = 16, CAMERA_OFF = 17, LOCK_DATA = 18, PLAY = 19, VOLUME_UP = 20, VOLUME_DOWN = 21, CONFIG_NETWORK = 22, VOLUME = 23, CHARGER_CONFIG = 24, CONFIG_CHARGER = 25, EGG_LOCK_ON = 26, EGG_LOCK_OFF = 27, EGG_PLAY = 28, EGG_GPIO = 29, EGG_FALLEN = 30, EGG_VOLUME = 31, EGG_TIMEOUT = 32, EGG_QUERY = 33, RFID_READER_INVENTORY = 34, RFID_READER_DIFFERENCE = 35, RFID_READER_DATA = 36, REBOOT = 63
     UID* = array[0..11, byte]
     PackResultObject* = object of RootObj
       uid*: UID
@@ -1727,7 +1668,7 @@ RFID-READER 将求差集后的结果上报给服务端。
       uid[i] = buf[offset + 1 + 1 + 1 + i]
     let unzipped: seq[byte] = unzeropack(buf, offset + header_size, length - header_size)
     let cmdtype = buf[offset + 1 + 1]
-    if cmdtype < 39 or cmdtype == 63:
+    if cmdtype < 37 or cmdtype == 63:
       result = PackResult(cmd_type: CommandType(cmdtype), uid: uid, parameter: parameter.decode_from(unzipped, 0))
     else:
       warn "Command type is invalid\n"
