@@ -369,11 +369,11 @@ receive 流程主动删除任务；或者任务超时，被 check task 流程删
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-service/src/box_service.nim
   proc serve() =
     var
-      name = prepareAddress(INADDR_ANY, 50008)
+      name = prepareAddress(INADDR_ANY, 5008)
       sock = newAsyncNativeSocket(domain = Domain.AF_INET, sockType = SockType.SOCK_DGRAM, protocol = Protocol.IPPROTO_UDP)
 
     discard bindAddr(sock.SocketHandle, cast[ptr SockAddr](name), sizeof(Sockaddr_in).Socklen)
-    info "Server bound to port 50008"
+    info "Server bound to port 5008"
 
     asyncCheck receive_always(sock)
     asyncCheck send_always(sock)
