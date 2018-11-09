@@ -102,7 +102,11 @@ DevicePin 用于去除来自设备的重复命令。来自设备的命令都附�
       for i in 0..len(rcvd) - 1:
         rcvbuf[i] = cast[uint8](ord(rcvd[i]))
       # info hexdump(@(rcvbuf[]), len(rcvd))
-      var data: PackResult = box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
+      var data: PackResult = try:
+                               box_packer.decode(@(rcvbuf[]), 0, len(rcvd))
+                             except:
+                               info hexdump(rcvd, len(rcvd))
+                               nil
       if data != nil:
         let
           name = await redis_client.hget("boxes", $data.uid)
@@ -1762,6 +1766,13 @@ RFID-READER-DATA 命令多批次上传数据到服务端。当服务端收到完
     var output = ""
     for i in 0..(size - 1):
       output.add("$1 " % (toHex(buf[i])))
+      if i mod 8 == 7:
+        output.add("\n")
+    return output
+  proc hexdump(buf: string, size: int): string =
+    var output = ""
+    for i in 0..<size:
+      output.add("$1 " % (toHex(ord(buf[i]))))
       if i mod 8 == 7:
         output.add("\n")
     return output
